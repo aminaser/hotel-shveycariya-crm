@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #f8fafc;
+  --color-foreground: #0f172a;
+  --color-card: #ffffff;
+  --color-primary: #1e3a5f;
+  --color-primary-foreground: #ffffff;
+  --color-accent: #c9a227;
+  --color-muted: #f1f5f9;
+  --color-muted-foreground: #64748b;
+  --color-border: #e2e8f0;
+  --color-destructive: #dc2626;
+  --font-sans: Inter, system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: var(--font-sans);
+  background: var(--color-background);
+  color: var(--color-foreground);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+@media print {
+  aside,
+  .no-print {
+    display: none !important;
+  }
+
+  main {
+    overflow: visible !important;
+  }
+
+  body {
+    background: white;
+  }
+
+  .act-print {
+    max-width: none;
+    padding: 0;
+  }
+
+  @page {
+    size: landscape;
+    margin: 10mm;
+  }
+
+  @page payment-portrait {
+    size: portrait;
+    margin: 12mm;
+  }
+
+  .payment-invoice-print {
+    page: payment-portrait;
+  }
+}
