@@ -1,4 +1,4 @@
-import type { ActDocument, ActLookupResult, AppSettings } from "@/api/types";
+import type { ActDocument } from "@/api/types";
 import { formatDate } from "@/lib/format";
 
 interface ActDocumentPrintProps {

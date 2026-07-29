@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.config import BACKUPS_DIR, DATA_DIR, settings
 from app.core.database import get_db
 from app.core.deps import get_current_user
+from app.core.permissions import require_owner
 from app.core.security import get_password_hash, verify_password
 from app.models.user import User
 from app.schemas.settings import (
@@ -24,6 +26,7 @@ from app.services.settings_service import get_or_create_settings
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 DB_PATH = DATA_DIR / "hotel_crm.db"
+SQLITE_HEADER = b"SQLite format 3\x00"
 
 
 def _settings_response(app_settings, db_path: str) -> AppSettingsResponse:
@@ -56,7 +59,7 @@ def get_settings(
 def update_settings(
     payload: AppSettingsUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_owner),
 ) -> AppSettingsResponse:
     app_settings = get_or_create_settings(db)
     for key, value in payload.model_dump(exclude_unset=True).items():
@@ -97,7 +100,17 @@ def create_backup(
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     backup_path = BACKUPS_DIR / f"hotel_crm_{timestamp}.db"
-    shutil.copy2(DB_PATH, backup_path)
+
+    # Use SQLite online backup API so WAL contents are included.
+    src = sqlite3.connect(str(DB_PATH))
+    try:
+        dst = sqlite3.connect(str(backup_path))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
 
     app_settings = get_or_create_settings(db)
     app_settings.last_backup_at = datetime.now(timezone.utc)
@@ -110,12 +123,15 @@ def create_backup(
 async def restore_backup(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_owner),
 ) -> Response:
     if not file.filename or not file.filename.endswith(".db"):
         raise HTTPException(status_code=400, detail="Нужен файл .db")
 
     contents = await file.read()
+    if not contents.startswith(SQLITE_HEADER):
+        raise HTTPException(status_code=400, detail="Файл не является базой SQLite")
+
     temp_path = BACKUPS_DIR / f"restore_{datetime.now(timezone.utc).timestamp()}.db"
     temp_path.write_bytes(contents)
     shutil.copy2(temp_path, DB_PATH)

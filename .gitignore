@@ -1,5 +1,7 @@
 data/
 backend/.venv/
+backend/runtime/
+backend/runtime-win/
 backend/__pycache__/
 backend/**/__pycache__/
 *.db
@@ -11,4 +13,9 @@ backend/**/__pycache__/
 node_modules/
 frontend/dist/
 release/
+.cache/
+*.dmg
+*.log
+.idea/
+.vscode/
 .DS_Store

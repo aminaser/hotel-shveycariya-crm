@@ -1,5 +1,6 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog } = require("electron");
 const { spawn } = require("child_process");
+const fs = require("fs");
 const http = require("http");
 const path = require("path");
 
@@ -9,7 +10,32 @@ let mainWindow = null;
 
 app.setName("Отель Швейцария CRM");
 
-function waitForBackend(retries = 40) {
+function getBackendDir() {
+  return isDev
+    ? path.join(__dirname, "..", "backend")
+    : path.join(process.resourcesPath, "backend");
+}
+
+function getPythonPath(backendDir) {
+  if (isDev) {
+    return process.platform === "win32"
+      ? path.join(backendDir, ".venv", "Scripts", "python.exe")
+      : path.join(backendDir, ".venv", "bin", "python");
+  }
+  // Packaged: portable CPython from scripts/prepare-runtime.sh
+  if (process.platform === "win32") {
+    return path.join(backendDir, "runtime", "python.exe");
+  }
+  return path.join(backendDir, "runtime", "bin", "python3");
+}
+
+function getDataDir() {
+  const dir = path.join(app.getPath("userData"), "data");
+  fs.mkdirSync(path.join(dir, "backups"), { recursive: true });
+  return dir;
+}
+
+function waitForBackend(retries = 60) {
   return new Promise((resolve, reject) => {
     const attempt = (left) => {
       http
@@ -28,17 +54,39 @@ function waitForBackend(retries = 40) {
 }
 
 function startBackend() {
-  const backendDir = path.join(__dirname, "..", "backend");
-  const python =
-    process.platform === "win32"
-      ? path.join(backendDir, ".venv", "Scripts", "python.exe")
-      : path.join(backendDir, ".venv", "bin", "python");
+  const backendDir = getBackendDir();
+  const python = getPythonPath(backendDir);
+  const dataDir = getDataDir();
+
+  if (!fs.existsSync(python)) {
+    throw new Error(
+      `Python runtime not found:\n${python}\n\nПересоберите приложение: npm run electron:build`,
+    );
+  }
 
   backendProcess = spawn(
     python,
     ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"],
-    { cwd: backendDir, stdio: "inherit", env: { ...process.env } },
+    {
+      cwd: backendDir,
+      stdio: isDev ? "inherit" : "pipe",
+      windowsHide: true,
+      env: {
+        ...process.env,
+        HOTEL_CRM_DATA_DIR: dataDir,
+        PYTHONUNBUFFERED: "1",
+      },
+    },
   );
+
+  if (backendProcess.stderr) {
+    backendProcess.stderr.on("data", (chunk) => {
+      console.error("[backend]", chunk.toString());
+    });
+  }
+  backendProcess.on("exit", (code, signal) => {
+    console.error(`[backend] exited code=${code} signal=${signal}`);
+  });
 }
 
 function requestBackup(token) {
@@ -60,6 +108,10 @@ function requestBackup(token) {
       },
       () => resolve(),
     );
+    req.setTimeout(5000, () => {
+      req.destroy();
+      resolve();
+    });
     req.on("error", () => resolve());
     req.end();
   });
@@ -100,8 +152,8 @@ async function createWindow() {
         parsedToken = data?.state?.token ?? null;
       }
       await requestBackup(parsedToken);
-    } catch {
-      // ignore backup errors on close
+    } catch (error) {
+      console.warn("Backup skipped on close:", error);
     }
     mainWindow.destroy();
     mainWindow = null;
@@ -111,14 +163,22 @@ async function createWindow() {
 ipcMain.handle("get-app-path", () => app.getPath("userData"));
 
 app.whenReady().then(async () => {
-  if (process.env.SKIP_BACKEND !== "1") {
-    startBackend();
-  }
   try {
+    if (process.env.SKIP_BACKEND !== "1") {
+      startBackend();
+    }
     await waitForBackend();
     await createWindow();
   } catch (error) {
     console.error(error);
+    dialog.showErrorBox(
+      "Отель Швейцария CRM",
+      `Не удалось запустить приложение.\n\n${error.message || error}`,
+    );
+    if (backendProcess) {
+      backendProcess.kill();
+      backendProcess = null;
+    }
     app.quit();
   }
 });
@@ -136,6 +196,10 @@ app.on("before-quit", () => {
 
 app.on("activate", async () => {
   if (BrowserWindow.getAllWindows().length === 0) {
-    await createWindow();
+    try {
+      await createWindow();
+    } catch (error) {
+      console.error(error);
+    }
   }
 });

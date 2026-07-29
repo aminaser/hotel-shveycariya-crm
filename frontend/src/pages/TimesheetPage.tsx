@@ -44,7 +44,6 @@ const TIME_OPTIONS = (() => {
       options.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
     }
   }
-  options.push("23:30");
   return options;
 })();
 
@@ -104,9 +103,10 @@ export function TimesheetPage() {
   const shifts = daySummary?.shifts ?? [];
 
   const onShiftEmployees = useMemo(() => {
-    const ids = new Set(shifts.map((s) => s.employee_id));
+    const list = daySummary?.shifts ?? [];
+    const ids = new Set(list.map((s) => s.employee_id));
     return employees.filter((e) => ids.has(e.id));
-  }, [employees, shifts]);
+  }, [employees, daySummary]);
 
   const waitersByWorkplace = useMemo(() => {
     const groups: Record<Workplace, string[]> = {
@@ -114,13 +114,13 @@ export function TimesheetPage() {
       bar: [],
       banquet: [],
     };
-    for (const shift of shifts) {
+    for (const shift of daySummary?.shifts ?? []) {
       if (!groups[shift.workplace].includes(shift.employee_name)) {
         groups[shift.workplace].push(shift.employee_name);
       }
     }
     return groups;
-  }, [shifts]);
+  }, [daySummary]);
 
   const resetEmployeeForm = () => {
     setEmployeeForm({ full_name: "", position: "официант", hourly_rate: "750" });

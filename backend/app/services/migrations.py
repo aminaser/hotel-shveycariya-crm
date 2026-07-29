@@ -142,6 +142,7 @@ def run_migrations() -> None:
         # Split planned vs actual checkout: previously check_out held the planned
         # departure date, which blocked the «Выезд» action whenever a date was set.
         _migrate_planned_check_out(conn)
+        _migrate_client_iin_bin_unique(conn)
 
     db = SessionLocal()
     try:
@@ -149,3 +150,44 @@ def run_migrations() -> None:
         seed_room_rates(db)
     finally:
         db.close()
+
+
+def _migrate_client_iin_bin_unique(conn) -> None:
+    """Drop DB-level UNIQUE on iin/bin so soft-deleted clients don't block reuse."""
+    inspector = inspect(engine)
+    if "clients" not in inspector.get_table_names():
+        return
+
+    conn.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS _crm_migrations ("
+            "name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+    )
+    conn.commit()
+    done = conn.execute(
+        text("SELECT 1 FROM _crm_migrations WHERE name = 'client_iin_bin_soft_unique'")
+    ).fetchone()
+    if done:
+        return
+
+    # Drop known unique / index names SQLAlchemy may have created.
+    for index_name in (
+        "ix_clients_iin",
+        "ix_clients_bin",
+        "uq_clients_iin",
+        "uq_clients_bin",
+    ):
+        conn.execute(text(f"DROP INDEX IF EXISTS {index_name}"))
+
+    # Recreate as non-unique indexes for lookup performance.
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_clients_iin ON clients (iin)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_clients_bin ON clients (bin)"))
+    conn.execute(
+        text(
+            "INSERT INTO _crm_migrations (name, applied_at) "
+            "VALUES ('client_iin_bin_soft_unique', :applied_at)"
+        ),
+        {"applied_at": today_local().isoformat()},
+    )
+    conn.commit()

@@ -56,6 +56,10 @@ export function SettingsPage() {
       toast.success("Настройки сохранены");
       queryClient.invalidateQueries({ queryKey: ["settings"] });
     },
+    onError: (e) => {
+      if (e instanceof ApiError) toast.error(e.message);
+      else toast.error("Не удалось сохранить настройки");
+    },
   });
 
   const changePassword = useMutation({
@@ -128,101 +132,118 @@ export function SettingsPage() {
         <p className="text-sm text-muted-foreground">Отель Швейцария · Текели</p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Отель</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label>Название</Label>
-              <Input
-                value={display.hotel_name ?? ""}
-                onChange={(e) => setLocal({ ...local, hotel_name: e.target.value })}
-              />
+      {isOwner ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Отель</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Название</Label>
+                <Input
+                  value={display.hotel_name ?? ""}
+                  onChange={(e) => setLocal({ ...local, hotel_name: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Город</Label>
+                <Input
+                  value={display.hotel_city ?? ""}
+                  onChange={(e) => setLocal({ ...local, hotel_city: e.target.value })}
+                />
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label>Город</Label>
-              <Input
-                value={display.hotel_city ?? ""}
-                onChange={(e) => setLocal({ ...local, hotel_city: e.target.value })}
-              />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Автоблокировка (мин)</Label>
+                <Input
+                  type="number"
+                  value={display.auto_lock_minutes ?? 15}
+                  onChange={(e) =>
+                    setLocal({ ...local, auto_lock_minutes: parseInt(e.target.value, 10) })
+                  }
+                />
+              </div>
+              <div className="flex items-end gap-2">
+                <input
+                  id="auto-backup"
+                  type="checkbox"
+                  checked={display.auto_backup_on_exit ?? true}
+                  onChange={(e) =>
+                    setLocal({ ...local, auto_backup_on_exit: e.target.checked })
+                  }
+                />
+                <Label htmlFor="auto-backup">Автобэкап при закрытии</Label>
+              </div>
             </div>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label>Автоблокировка (мин)</Label>
-              <Input
-                type="number"
-                value={display.auto_lock_minutes ?? 15}
-                onChange={(e) =>
-                  setLocal({ ...local, auto_lock_minutes: parseInt(e.target.value, 10) })
-                }
-              />
-            </div>
-            <div className="flex items-end gap-2">
-              <input
-                id="auto-backup"
-                type="checkbox"
-                checked={display.auto_backup_on_exit ?? true}
-                onChange={(e) =>
-                  setLocal({ ...local, auto_backup_on_exit: e.target.checked })
-                }
-              />
-              <Label htmlFor="auto-backup">Автобэкап при закрытии</Label>
-            </div>
-          </div>
-          <Button onClick={() => saveSettings.mutate()}>Сохранить настройки</Button>
-        </CardContent>
-      </Card>
+            <Button onClick={() => saveSettings.mutate()}>Сохранить настройки</Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle>Отель</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 text-sm text-muted-foreground">
+            <p>
+              {display.hotel_name ?? "—"} · {display.hotel_city ?? "—"}
+            </p>
+            <p>Автоблокировка: {display.auto_lock_minutes ?? 15} мин</p>
+            <p>Изменение настроек доступно только владельцу.</p>
+          </CardContent>
+        </Card>
+      )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Юридические данные (для актов)</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label>Полное наименование (ИП / ТОО)</Label>
-            <Input
-              value={display.hotel_legal_name ?? ""}
-              onChange={(e) => setLocal({ ...local, hotel_legal_name: e.target.value })}
-              placeholder="ИП Иванов / ТОО Швейцария"
-            />
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
+      {isOwner && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Юридические данные (для актов)</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label>БИН исполнителя</Label>
+              <Label>Полное наименование (ИП / ТОО)</Label>
               <Input
-                value={display.hotel_bin ?? ""}
-                onChange={(e) =>
-                  setLocal({
-                    ...local,
-                    hotel_bin: e.target.value.replace(/\D/g, "").slice(0, 12),
-                  })
-                }
-                placeholder="12 цифр"
-                maxLength={12}
+                value={display.hotel_legal_name ?? ""}
+                onChange={(e) => setLocal({ ...local, hotel_legal_name: e.target.value })}
+                placeholder="ИП Иванов / ТОО Швейцария"
               />
             </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>БИН исполнителя</Label>
+                <Input
+                  value={display.hotel_bin ?? ""}
+                  onChange={(e) =>
+                    setLocal({
+                      ...local,
+                      hotel_bin: e.target.value.replace(/\D/g, "").slice(0, 12),
+                    })
+                  }
+                  placeholder="12 цифр"
+                  maxLength={12}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Руководитель (подпись в акте)</Label>
+                <Input
+                  value={display.hotel_director ?? ""}
+                  onChange={(e) => setLocal({ ...local, hotel_director: e.target.value })}
+                />
+              </div>
+            </div>
             <div className="space-y-2">
-              <Label>Руководитель (подпись в акте)</Label>
+              <Label>Юридический адрес</Label>
               <Input
-                value={display.hotel_director ?? ""}
-                onChange={(e) => setLocal({ ...local, hotel_director: e.target.value })}
+                value={display.hotel_address ?? ""}
+                onChange={(e) => setLocal({ ...local, hotel_address: e.target.value })}
+                placeholder="г. Текели, ул. ..."
               />
             </div>
-          </div>
-          <div className="space-y-2">
-            <Label>Юридический адрес</Label>
-            <Input
-              value={display.hotel_address ?? ""}
-              onChange={(e) => setLocal({ ...local, hotel_address: e.target.value })}
-              placeholder="г. Текели, ул. ..."
-            />
-          </div>
-          <Button onClick={() => saveSettings.mutate()}>Сохранить юр. данные</Button>
-        </CardContent>
-      </Card>
+            <Button onClick={() => saveSettings.mutate()}>Сохранить юр. данные</Button>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -340,24 +361,26 @@ export function SettingsPage() {
             <Button onClick={() => backup.mutate()} disabled={backup.isPending}>
               Создать бэкап
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                const input = document.createElement("input");
-                input.type = "file";
-                input.accept = ".db";
-                input.onchange = () => {
-                  const file = input.files?.[0];
-                  if (file && confirm("Восстановить базу из файла?")) {
-                    restore.mutate(file);
-                  }
-                };
-                input.click();
-              }}
-            >
-              Восстановить из .db
-            </Button>
+            {isOwner && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  const input = document.createElement("input");
+                  input.type = "file";
+                  input.accept = ".db";
+                  input.onchange = () => {
+                    const file = input.files?.[0];
+                    if (file && confirm("Восстановить базу из файла?")) {
+                      restore.mutate(file);
+                    }
+                  };
+                  input.click();
+                }}
+              >
+                Восстановить из .db
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>

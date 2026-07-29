@@ -210,13 +210,23 @@ def clear_trash(
     stays = db.query(Stay).filter(Stay.deleted_at.isnot(None)).all()
     clients = db.query(Client).filter(Client.deleted_at.isnot(None)).all()
     banquets = db.query(Banquet).filter(Banquet.deleted_at.isnot(None)).all()
-    count = len(stays) + len(clients) + len(banquets)
+
+    # Delete stays first so client FK references do not block hard-delete.
     for stay in stays:
         db.delete(stay)
+
+    # Soft-deleted clients may still be referenced by historical (non-deleted)
+    # stays — cascade those so clear_trash does not raise IntegrityError.
     for client in clients:
+        leftover = db.query(Stay).filter(Stay.client_id == client.id).all()
+        for stay in leftover:
+            db.delete(stay)
         db.delete(client)
+
     for banquet in banquets:
         db.delete(banquet)
+
+    count = len(stays) + len(clients) + len(banquets)
     log_activity(
         db,
         user=current_user,

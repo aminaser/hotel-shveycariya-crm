@@ -21,6 +21,7 @@ from app.schemas.timesheet import (
     TimesheetDaySummary,
 )
 from app.services.timesheet_calc import shift_earnings, shift_hours
+from app.services.room_service import today_local
 
 router = APIRouter(tags=["timesheet"])
 
@@ -103,7 +104,7 @@ def delete_employee(
 
 @router.get("/timesheet", response_model=TimesheetDaySummary)
 def get_timesheet_day(
-    work_date: date = Query(default_factory=date.today),
+    work_date: date = Query(default_factory=today_local),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> TimesheetDaySummary:

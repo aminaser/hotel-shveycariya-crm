@@ -8,9 +8,12 @@
     "dev:backend": "cd backend && .venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port 8000",
     "dev:frontend": "cd frontend && npm run dev -- --host 127.0.0.1",
     "dev": "concurrently -k \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "prepare:runtime": "bash scripts/prepare-runtime.sh",
+    "prepare:runtime:win": "bash scripts/prepare-runtime.sh win",
     "build:frontend": "cd frontend && npm run build",
     "electron:dev": "concurrently -k \"npm run dev:backend\" \"npm run dev:frontend\" \"wait-on -t 60000 http-get://127.0.0.1:8000/api/v1/health http-get://127.0.0.1:5173 && env SKIP_BACKEND=1 electron .\"",
-    "electron:build": "npm run build:frontend && electron-builder --mac",
+    "electron:build": "npm run prepare:runtime && npm run build:frontend && electron-builder --mac",
+    "electron:build:win": "npm run prepare:runtime:win && npm run build:frontend && electron-builder --win --x64",
     "install:all": "cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && cd ../frontend && npm install && cd .. && npm install"
   },
   "build": {
@@ -21,22 +24,48 @@
     },
     "files": [
       "electron/**/*",
-      "frontend/dist/**/*",
-      "backend/**/*",
-      "!backend/.venv/**/*",
-      "data/.gitkeep"
+      "frontend/dist/**/*"
     ],
     "extraResources": [
       {
         "from": "backend",
         "to": "backend",
-        "filter": ["**/*", "!.venv/**"]
+        "filter": [
+          "**/*",
+          "!.venv/**",
+          "!runtime/**",
+          "!runtime-win/**",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!.pytest_cache/**",
+          "!**/*.db",
+          "!**/*.db-*"
+        ]
       }
     ],
     "mac": {
       "category": "public.app-category.business",
-      "target": ["dmg"]
-    }
+      "target": ["dmg"],
+      "identity": null
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "language": "1049"
+    },
+    "afterPack": "./scripts/afterPack.cjs"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",

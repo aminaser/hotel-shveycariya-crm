@@ -25,7 +25,7 @@ import {
 import { formatDate, roomStatusLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-const STATUS_OPTIONS: RoomStatus[] = ["occupied", "free", "cleaning", "booked"];
+const STATUS_OPTIONS: RoomStatus[] = ["occupied", "free", "cleaning", "booked", "maintenance"];
 
 const statusBadgeClass: Record<RoomStatus, string> = {
   occupied: "bg-red-100 text-red-800",

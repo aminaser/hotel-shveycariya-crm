@@ -117,8 +117,8 @@ async function fetchBookings(dateFrom: string, dateTo: string): Promise<SpaBooki
     .is("deleted_at", null)
     .gte("booking_date", dateFrom)
     .lte("booking_date", dateTo)
-    .order("booking_date", { ascending: true })
-    .order("slot_time", { ascending: true });
+    .order("booking_date", { ascending: false })
+    .order("slot_time", { ascending: false });
   if (error) throw new Error(error.message);
   return (data ?? []) as SpaBooking[];
 }

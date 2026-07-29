@@ -15,13 +15,17 @@ import {
   Trash2,
   Users,
 } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { useEffect } from "react";
 
 import { apiFetch } from "@/api/client";
 import type { AppSettings } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { useNewRecordNotifications } from "@/hooks/useNewRecordNotifications";
+import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { useAuthStore } from "@/stores/auth";
+import { useBadgeStore } from "@/stores/badges";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -40,11 +44,67 @@ const navItems = [
   { to: "/trash", label: "Корзина", icon: Trash2 },
 ];
 
+function NavBadgeLink({
+  to,
+  label,
+  Icon,
+}: {
+  to: string;
+  label: string;
+  Icon: React.ComponentType<{ className?: string }>;
+}) {
+  const badgeCount = useBadgeStore((s) => s.counts[to] ?? 0);
+  const clearBadge = useBadgeStore((s) => s.clear);
+
+  return (
+    <NavLink
+      to={to}
+      end={to !== "/registry"}
+      onClick={() => clearBadge(to)}
+      className={({ isActive }) =>
+        cn(
+          "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
+          isActive ? "bg-white/15 text-white" : "text-white/80 hover:bg-white/10",
+        )
+      }
+    >
+      <Icon className="h-4 w-4 shrink-0" />
+      <span className="flex-1">{label}</span>
+      {badgeCount > 0 && (
+        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[11px] font-bold leading-none text-white">
+          {badgeCount > 9 ? "9+" : badgeCount}
+        </span>
+      )}
+    </NavLink>
+  );
+}
+
 export function AppLayout({ children }: { children?: ReactNode }) {
   const navigate = useNavigate();
   const logout = useAuthStore((s) => s.logout);
   const user = useAuthStore((s) => s.user);
   const token = useAuthStore((s) => s.token);
+
+  const queryClient = useQueryClient();
+  useNewRecordNotifications(navigate);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) return;
+    const channel = supabase
+      .channel("crm-global-notifications")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "requests" }, () => {
+        void queryClient.invalidateQueries({ queryKey: ["bg-guest-requests"] });
+        void queryClient.invalidateQueries({ queryKey: ["guest-requests"] });
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "spa_bookings" }, () => {
+        void queryClient.invalidateQueries({ queryKey: ["bg-spa-bookings"] });
+        void queryClient.invalidateQueries({ queryKey: ["spa-bookings"] });
+      })
+      .subscribe();
+    return () => {
+      void supabase?.removeChannel(channel);
+    };
+  }, [queryClient]);
 
   const visibleNavItems = navItems.filter(
     (item) => item.to !== "/analytics" || user?.role === "owner",
@@ -77,20 +137,7 @@ export function AppLayout({ children }: { children?: ReactNode }) {
         </div>
         <nav className="flex-1 space-y-1 overflow-y-auto p-3">
           {visibleNavItems.map(({ to, label, icon: Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to !== "/registry"}
-              className={({ isActive }) =>
-                cn(
-                  "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
-                  isActive ? "bg-white/15 text-white" : "text-white/80 hover:bg-white/10",
-                )
-              }
-            >
-              <Icon className="h-4 w-4 shrink-0" />
-              {label}
-            </NavLink>
+            <NavBadgeLink key={to} to={to} label={label} Icon={Icon} />
           ))}
         </nav>
         <div className="border-t border-white/10 p-3">

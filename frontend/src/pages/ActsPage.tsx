@@ -4,7 +4,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { apiDownload, apiFetch, ApiError } from "@/api/client";
-import type { ActDocument, ActLineItemInput, ActLookupResult } from "@/api/types";
+import type { ActDocument, ActLineItemInput, ActLookupResult, AppSettings } from "@/api/types";
 import { ActDocumentPrint } from "@/components/ActDocumentPrint";
 import { InvoiceDocumentPrint } from "@/components/InvoiceDocumentPrint";
 import { PaymentInvoiceDocumentPrint } from "@/components/PaymentInvoiceDocumentPrint";
@@ -73,7 +73,7 @@ export function ActsPage() {
 
   const { data: settings } = useQuery({
     queryKey: ["settings"],
-    queryFn: () => apiFetch<import("@/api/types").AppSettings>("/settings"),
+    queryFn: () => apiFetch<AppSettings>("/settings"),
   });
 
   const searchMutation = useMutation({

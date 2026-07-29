@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
@@ -100,6 +100,7 @@ def get_client(
 
     stays = (
         db.query(Stay)
+        .options(joinedload(Stay.room))
         .filter(Stay.client_id == client_id, Stay.deleted_at.is_(None))
         .order_by(Stay.record_date.desc())
         .all()
@@ -112,7 +113,7 @@ def get_client(
             payment_amount=s.payment_amount,
             payment_status=s.payment_status,
             payment_method=s.payment_method,
-            room_number=s.room.number,
+            room_number=s.room.number if s.room else "—",
         )
         for s in stays
     ]

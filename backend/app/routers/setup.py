@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.security import get_password_hash
-from app.models.app_settings import AppSettings
 from app.models.room import Room, RoomStatus
 from app.models.user import User
 from app.schemas.auth import SetupInitRequest, SetupStatusResponse
@@ -49,5 +49,19 @@ def setup_init(payload: SetupInitRequest, db: Session = Depends(get_db)) -> Setu
             continue
         db.add(Room(number=cleaned, status=RoomStatus.free))
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        # Concurrent init or duplicate username — treat as already initialized.
+        if db.query(User).first() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Система уже настроена",
+            ) from None
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Не удалось выполнить первичную настройку",
+        ) from None
+
     return SetupStatusResponse(is_initialized=True)

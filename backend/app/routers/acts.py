@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
@@ -42,6 +43,18 @@ EXECUTOR_NAME = 'ИП Торгово-развлекательный компле
 EXECUTOR_ADDRESS = EXECUTOR_FULL
 
 
+def _russian_plural(n: int, one: str, few: str, many: str) -> str:
+    n_abs = abs(n) % 100
+    n1 = n_abs % 10
+    if 11 <= n_abs <= 19:
+        return many
+    if n1 == 1:
+        return one
+    if 2 <= n1 <= 4:
+        return few
+    return many
+
+
 def _amount_to_words(amount: Decimal) -> str:
     n = int(amount)
     if n == 0:
@@ -51,6 +64,28 @@ def _amount_to_words(amount: Decimal) -> str:
         "",
         "один",
         "два",
+        "три",
+        "четыре",
+        "пять",
+        "шесть",
+        "семь",
+        "восемь",
+        "девять",
+        "десять",
+        "одиннадцать",
+        "двенадцать",
+        "тринадцать",
+        "четырнадцать",
+        "пятнадцать",
+        "шестнадцать",
+        "семнадцать",
+        "восемнадцать",
+        "девятнадцать",
+    ]
+    ones_f = [
+        "",
+        "одна",
+        "две",
         "три",
         "четыре",
         "пять",
@@ -94,8 +129,9 @@ def _amount_to_words(amount: Decimal) -> str:
         "девятьсот",
     ]
 
-    def chunk_to_words(num: int) -> str:
+    def chunk_to_words(num: int, feminine: bool = False) -> str:
         parts: list[str] = []
+        ones_list = ones_f if feminine else ones
         if num >= 100:
             parts.append(hundreds[num // 100])
             num %= 100
@@ -103,7 +139,7 @@ def _amount_to_words(amount: Decimal) -> str:
             parts.append(tens[num // 10])
             num %= 10
         if num > 0:
-            parts.append(ones[num])
+            parts.append(ones_list[num])
         return " ".join(p for p in parts if p)
 
     millions = n // 1_000_000
@@ -113,10 +149,10 @@ def _amount_to_words(amount: Decimal) -> str:
     words: list[str] = []
     if millions:
         words.append(chunk_to_words(millions))
-        words.append("миллион" if millions == 1 else "миллионов" if millions > 4 else "миллиона")
+        words.append(_russian_plural(millions, "миллион", "миллиона", "миллионов"))
     if thousands:
-        words.append(chunk_to_words(thousands))
-        words.append("тысяча" if thousands == 1 else "тысяч" if thousands > 4 else "тысячи")
+        words.append(chunk_to_words(thousands, feminine=True))
+        words.append(_russian_plural(thousands, "тысяча", "тысячи", "тысяч"))
     if remainder or not words:
         words.append(chunk_to_words(remainder))
 
@@ -188,9 +224,10 @@ def _build_journal_line_items(stays: list[Stay]) -> list[ActLineItem]:
     line_items: list[ActLineItem] = []
     for idx, stay in enumerate(stays, start=1):
         nights = _stay_nights(stay)
+        amount = stay.payment_amount or Decimal("0")
         # Per-night price so the form reads like the official sample:
         # «Проживание в гостинице <ФИО>» · 5 сут. × 15 000 = 75 000.
-        unit_price = (stay.payment_amount / nights).quantize(Decimal("0.01"))
+        unit_price = (amount / nights).quantize(Decimal("0.01")) if nights else Decimal("0")
         line_items.append(
             ActLineItem(
                 line_no=idx,
@@ -199,7 +236,7 @@ def _build_journal_line_items(stays: list[Stay]) -> list[ActLineItem]:
                 unit="сут.",
                 quantity=Decimal(nights),
                 unit_price=unit_price,
-                amount=stay.payment_amount,
+                amount=amount,
                 vat_amount=Decimal("0"),
                 stay_id=stay.id,
             )
@@ -362,10 +399,23 @@ def preview_act(
     if payload.act_number:
         act_number = payload.act_number
     else:
-        next_no = app_settings.act_next_number or 1
-        act_number = str(next_no)
-        app_settings.act_next_number = next_no + 1
-        db.commit()
+        # Atomic increment to avoid duplicate act numbers under concurrency.
+        row = db.execute(
+            text(
+                "UPDATE app_settings SET act_next_number = COALESCE(act_next_number, 1) + 1 "
+                "WHERE id = :id RETURNING act_next_number - 1"
+            ),
+            {"id": app_settings.id},
+        ).fetchone()
+        if row is None:
+            next_no = app_settings.act_next_number or 1
+            app_settings.act_next_number = next_no + 1
+            db.commit()
+            act_number = str(next_no)
+        else:
+            db.commit()
+            db.refresh(app_settings)
+            act_number = str(row[0])
 
     if payload.recipient_type == "individual":
         id_label = "ИИН"

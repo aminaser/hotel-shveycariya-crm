@@ -61,11 +61,11 @@ def _room_with_guest(db: Session, room: Room) -> RoomResponse:
     )
 
 
-def _sort_room_number(room: Room) -> tuple[int, str]:
+def _sort_room_number(room: Room) -> tuple[int, int, str]:
     try:
-        return (0, int(room.number))
+        return (0, int(room.number), "")
     except ValueError:
-        return (1, room.number)
+        return (1, 0, room.number)
 
 
 @router.get("", response_model=list[RoomResponse])

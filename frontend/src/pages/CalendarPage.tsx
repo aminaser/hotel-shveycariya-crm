@@ -164,9 +164,13 @@ export function CalendarPage() {
       apiFetch<Banquet[]>(`/banquets?date_from=${rangeFrom}&date_to=${rangeTo}`),
   });
 
+  // Look back further than the visible calendar: check-out dates can fall
+  // inside the window while record_date is weeks earlier.
+  const stayRangeFrom = toIsoDate(addDays(today, -90));
   const { data: stays = [], isLoading: staysLoading } = useQuery({
-    queryKey: ["stays", "calendar"],
-    queryFn: () => apiFetch<Stay[]>("/stays"),
+    queryKey: ["stays", "calendar", stayRangeFrom, rangeTo],
+    queryFn: () =>
+      apiFetch<Stay[]>(`/stays?date_from=${stayRangeFrom}&date_to=${rangeTo}`),
   });
 
   const { data: spa = [], isLoading: spaLoading } = useQuery({

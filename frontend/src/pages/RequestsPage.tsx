@@ -33,7 +33,8 @@ const STAGE_VARIANT: Record<RequestStage, "default" | "muted" | "warning" | "dan
 const ARCHIVE_AFTER_MS = 24 * 60 * 60 * 1000;
 
 function isArchived(request: GuestRequest): boolean {
-  return Date.now() - new Date(request.created_at).getTime() > ARCHIVE_AFTER_MS;
+  if (request.stage !== "done") return false;
+  return Date.now() - new Date(request.updated_at).getTime() > ARCHIVE_AFTER_MS;
 }
 
 async function fetchRequests(): Promise<GuestRequest[]> {

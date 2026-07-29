@@ -17,9 +17,12 @@ interface AuthState {
   username: string | null;
   user: AuthUser | null;
   lastActivity: number;
+  locked: boolean;
   setAuth: (token: string, user: AuthUser) => void;
   setUser: (user: AuthUser) => void;
   touch: () => void;
+  lock: () => void;
+  unlock: () => void;
   logout: () => void;
   isOwner: () => boolean;
 }
@@ -31,16 +34,20 @@ export const useAuthStore = create<AuthState>()(
       username: null,
       user: null,
       lastActivity: Date.now(),
+      locked: false,
       setAuth: (token, user) =>
         set({
           token,
           username: user.username,
           user,
           lastActivity: Date.now(),
+          locked: false,
         }),
       setUser: (user) => set({ user, username: user.username }),
       touch: () => set({ lastActivity: Date.now() }),
-      logout: () => set({ token: null, username: null, user: null }),
+      lock: () => set({ locked: true }),
+      unlock: () => set({ locked: false, lastActivity: Date.now() }),
+      logout: () => set({ token: null, username: null, user: null, locked: false }),
       isOwner: () => get().user?.role === "owner",
     }),
     {

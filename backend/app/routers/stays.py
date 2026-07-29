@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+import logging
 
 from sqlalchemy import or_
 
@@ -22,6 +23,7 @@ from app.schemas.stay import (
     StayUpdate,
 )
 from app.services.audit import log_activity, set_created_by, set_updated_by, summarize_changes
+from app.services.room_sync import sync_checkin, sync_checkout
 from app.services.room_service import (
     get_active_stay,
     recalculate_room_status,
@@ -31,6 +33,7 @@ from app.services.room_service import (
 )
 
 router = APIRouter(prefix="/stays", tags=["stays"])
+logger = logging.getLogger(__name__)
 
 PRESET_METHODS = {"cash", "kaspi", "halyk"}
 
@@ -195,7 +198,7 @@ def list_stays(
             (Client.full_name.ilike(term))
             | (Client.phone.ilike(term))
             | (Room.number.ilike(term))
-        )
+        ).distinct()
 
     stays = query.order_by(Stay.record_date.desc(), Stay.id.desc()).all()
     return [_stay_to_response(s) for s in stays]
@@ -250,6 +253,19 @@ def create_stay(
     db.refresh(stay)
     stay = _active_stays(db).filter(Stay.id == stay.id).first()
     assert stay is not None
+
+    try:
+        if stay.client and stay.room:
+            sync_checkin(
+                room_number=stay.room.number,
+                guest_name=stay.client.full_name,
+                phone=stay.client.phone,
+                check_in=stay.check_in or stay.record_date,
+                planned_check_out=stay.planned_check_out,
+            )
+    except Exception:
+        logger.exception("Failed to sync check-in to Supabase for stay %s", stay.id)
+
     return _stay_to_response(stay)
 
 
@@ -311,6 +327,22 @@ def update_stay(
     db.commit()
     stay = _active_stays(db).filter(Stay.id == stay_id).first()
     assert stay is not None
+
+    try:
+        if stay.room and stay.client:
+            if stay.check_out:
+                sync_checkout(stay.room.number)
+            else:
+                sync_checkin(
+                    room_number=stay.room.number,
+                    guest_name=stay.client.full_name,
+                    phone=stay.client.phone,
+                    check_in=stay.check_in or stay.record_date,
+                    planned_check_out=stay.planned_check_out,
+                )
+    except Exception:
+        logger.exception("Failed to sync stay update to Supabase for stay %s", stay.id)
+
     return _stay_to_response(stay)
 
 
@@ -341,6 +373,13 @@ def checkout_stay(
     db.commit()
     stay = _active_stays(db).filter(Stay.id == stay_id).first()
     assert stay is not None
+
+    try:
+        if stay.room:
+            sync_checkout(stay.room.number)
+    except Exception:
+        logger.exception("Failed to sync checkout to Supabase for stay %s", stay.id)
+
     return _stay_to_response(stay)
 
 
@@ -367,4 +406,11 @@ def delete_stay(
         entity_label=f"Номер №{room_number}",
     )
     db.commit()
+
+    try:
+        if room_number != "?":
+            sync_checkout(room_number)
+    except Exception:
+        logger.exception("Failed to sync delete/checkout to Supabase for stay %s", stay_id)
+
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -135,6 +135,12 @@ export function ClientsPage() {
                   Загрузка...
                 </td>
               </tr>
+            ) : clients.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
+                  Клиенты не найдены
+                </td>
+              </tr>
             ) : (
               clients.map((client) => (
                 <tr key={client.id} className="border-b border-border/60 hover:bg-muted/30">
