@@ -23,6 +23,7 @@ class Banquet(Base):
         Numeric(12, 2), default=Decimal("0"), nullable=False
     )
     payment_method: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    payment_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
     dishes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(

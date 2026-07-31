@@ -53,8 +53,10 @@ export interface SpaBooking {
   source: SpaBookingSource;
   request_id: string | null;
   notes: string | null;
+  /** Amount charged / received (₸). */
   price: number | null;
   payment_method: string | null;
+  payment_date: string | null;
   created_by_name: string | null;
   updated_by_name: string | null;
 }
@@ -72,6 +74,12 @@ export interface SpaBookingCreate {
   source?: SpaBookingSource;
   notes?: string | null;
   price?: number | null;
-  payment_method?: string | null;
+}
+
+export interface SpaPayment {
+  booking_id: string;
+  amount: string;
+  payment_method: string | null;
+  payment_date: string | null;
 }
 

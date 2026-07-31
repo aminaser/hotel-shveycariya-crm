@@ -51,6 +51,10 @@ class AnalyticsSummary(BaseModel):
     unpaid_amount: Decimal
     unpaid_count: int
     payments_by_method: PaymentBreakdown
+    hotel_revenue: Decimal = Decimal("0")
+    banquet_revenue: Decimal = Decimal("0")
+    takeaway_revenue: Decimal = Decimal("0")
+    spa_revenue: Decimal = Decimal("0")
     bookings_count: int
     extensions_count: int
     alumni_count: int = 0

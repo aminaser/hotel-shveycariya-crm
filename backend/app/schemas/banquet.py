@@ -17,6 +17,7 @@ class BanquetBase(BaseModel):
     event_type: Optional[str] = None
     prepayment: Decimal = Decimal("0")
     payment_method: Optional[str] = None
+    payment_date: Optional[date] = None
     dishes: Optional[str] = None
     notes: Optional[str] = None
 
@@ -35,6 +36,7 @@ class BanquetUpdate(BaseModel):
     event_type: Optional[str] = None
     prepayment: Optional[Decimal] = None
     payment_method: Optional[str] = None
+    payment_date: Optional[date] = None
     dishes: Optional[str] = None
     notes: Optional[str] = None
 

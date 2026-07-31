@@ -14,6 +14,7 @@ import { formatPaymentMethod } from "@/lib/payment-method";
 import { groupStays } from "@/lib/stay-groups";
 import {
   type SpaBooking,
+  type SpaPayment,
   isSupabaseConfigured,
   supabase,
 } from "@/lib/supabase";
@@ -63,7 +64,31 @@ async function fetchSpaBookings(): Promise<SpaBooking[]> {
     .lte("booking_date", toStr)
     .order("booking_date", { ascending: true });
   if (error) throw new Error(error.message);
-  return (data ?? []) as SpaBooking[];
+  const bookings = (data ?? []) as SpaBooking[];
+  if (bookings.length === 0) return bookings;
+  try {
+    const ids = bookings.map((b) => b.id).join(",");
+    const payments = await apiFetch<SpaPayment[]>(`/spa-payments?booking_ids=${ids}`);
+    const byId = new Map(payments.map((p) => [p.booking_id, p]));
+    return bookings.map((booking) => {
+      const payment = byId.get(booking.id);
+      if (!payment) {
+        return { ...booking, payment_method: null, payment_date: null };
+      }
+      return {
+        ...booking,
+        price: Number(payment.amount) || booking.price,
+        payment_method: payment.payment_method,
+        payment_date: payment.payment_date,
+      };
+    });
+  } catch {
+    return bookings.map((booking) => ({
+      ...booking,
+      payment_method: null,
+      payment_date: null,
+    }));
+  }
 }
 
 function spaServiceLabel(service: string): string {
@@ -124,7 +149,8 @@ function buildUnified(
     });
 
   const spaRows: UnifiedBooking[] = spa.map((booking) => {
-    const paid = Boolean(booking.payment_method);
+    const amount = booking.price ?? 0;
+    const paid = Boolean(booking.payment_date) && amount > 0;
     return {
       key: `spa-${booking.id}`,
       source: "spa" as const,
@@ -133,7 +159,7 @@ function buildUnified(
         booking.room ? ` · №${booking.room}` : ""
       }`,
       date: booking.booking_date,
-      amount: booking.price ?? 0,
+      amount,
       payment: paid ? ("paid" as const) : ("unpaid" as const),
       paymentMethod: booking.payment_method,
       pendingCheckIn: false,
@@ -143,6 +169,7 @@ function buildUnified(
 
   const banquetRows: UnifiedBooking[] = banquets.map((b) => {
     const prepay = parseFloat(b.prepayment) || 0;
+    const paid = Boolean(b.payment_date) && prepay > 0;
     return {
       key: `banquet-${b.id}`,
       source: "banquet" as const,
@@ -152,7 +179,7 @@ function buildUnified(
         .join(" · "),
       date: b.event_date,
       amount: prepay,
-      payment: prepay > 0 ? ("paid" as const) : ("unpaid" as const),
+      payment: paid ? ("paid" as const) : ("unpaid" as const),
       paymentMethod: b.payment_method,
       pendingCheckIn: b.event_date >= todayLocal(),
       route: "/banquets",

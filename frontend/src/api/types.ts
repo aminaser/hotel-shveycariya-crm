@@ -104,6 +104,7 @@ export interface Banquet {
   event_type: string | null;
   prepayment: string;
   payment_method: string | null;
+  payment_date: string | null;
   dishes: string | null;
   notes: string | null;
   created_at: string;
@@ -121,6 +122,8 @@ export interface TakeawayOrder {
   guest_name: string;
   phone: string | null;
   prepayment: string;
+  payment_method: string | null;
+  payment_date: string | null;
   dishes: string | null;
   notes: string | null;
   created_at: string;
@@ -195,6 +198,10 @@ export interface AnalyticsData {
       halyk: string;
       other: string;
     };
+    hotel_revenue: string;
+    banquet_revenue: string;
+    takeaway_revenue: string;
+    spa_revenue: string;
     bookings_count: number;
     extensions_count: number;
     alumni_count: number;

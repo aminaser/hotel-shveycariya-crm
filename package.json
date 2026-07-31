@@ -1,6 +1,6 @@
 {
   "name": "hotel-shveycariya-crm",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "description": "CRM для отеля Швейцария, Текели",
   "main": "electron/main.cjs",

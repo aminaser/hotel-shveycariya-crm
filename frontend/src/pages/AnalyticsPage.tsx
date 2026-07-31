@@ -245,12 +245,12 @@ export function AnalyticsPage() {
       <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
         {[
           { label: "Выручка", value: formatMoney(summary.total_revenue) },
+          { label: "Отель", value: formatMoney(summary.hotel_revenue) },
+          { label: "Банкеты", value: formatMoney(summary.banquet_revenue) },
+          { label: "На вынос", value: formatMoney(summary.takeaway_revenue) },
+          { label: "Сауна / баня", value: formatMoney(summary.spa_revenue) },
           { label: "Средняя / день", value: formatMoney(summary.avg_daily_revenue) },
           { label: "Зарплата официантов", value: formatMoney(summary.total_salary_expense) },
-          { label: "Зарплата / день", value: formatMoney(summary.avg_daily_salary) },
-          { label: "Заселения", value: summary.total_checkins },
-          { label: "Выезды", value: summary.total_checkouts },
-          { label: "Занятость", value: `${summary.occupancy_rate}%` },
           { label: "Долг", value: formatMoney(summary.unpaid_amount) },
         ].map((item) => (
           <Card key={item.label}>
@@ -402,6 +402,23 @@ export function AnalyticsPage() {
             <CardTitle className="text-base">Сводка оплат</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Отель</span>
+              <span className="font-medium">{formatMoney(summary.hotel_revenue)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Банкеты</span>
+              <span className="font-medium">{formatMoney(summary.banquet_revenue)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">На вынос</span>
+              <span className="font-medium">{formatMoney(summary.takeaway_revenue)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Сауна / баня</span>
+              <span className="font-medium">{formatMoney(summary.spa_revenue)}</span>
+            </div>
+            <div className="border-t border-border pt-3" />
             <div className="flex justify-between">
               <span className="text-muted-foreground">Наличка</span>
               <span className="font-medium">{formatMoney(summary.payments_by_method.cash)}</span>

@@ -8,6 +8,7 @@ import type { Banquet } from "@/api/types";
 import { AuthorFilter } from "@/components/AuthorFilter";
 import { AuthorshipMeta } from "@/components/AuthorshipMeta";
 import { BanquetMenuSheet } from "@/components/BanquetMenuSheet";
+import { PaymentMethodSelect } from "@/components/PaymentMethodSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,7 +26,14 @@ import {
   formatDishesPreview,
   parseDishes,
 } from "@/lib/banquet-dishes";
+import { todayLocal } from "@/lib/dates";
 import { formatDate, formatMoney } from "@/lib/format";
+import {
+  formatPaymentMethod,
+  resolvePaymentMethod,
+  splitPaymentMethod,
+  type PaymentMethodPreset,
+} from "@/lib/payment-method";
 import { cn } from "@/lib/utils";
 
 interface BanquetForm {
@@ -37,12 +45,15 @@ interface BanquetForm {
   people_count: string;
   event_type: string;
   prepayment: string;
+  payment_method_preset: PaymentMethodPreset | string;
+  payment_method_custom: string;
+  payment_date: string;
   dishes: string;
 }
 
 function emptyForm(): BanquetForm {
   return {
-    event_date: new Date().toISOString().slice(0, 10),
+    event_date: todayLocal(),
     event_time: "",
     guest_name: "",
     phone: "",
@@ -50,11 +61,15 @@ function emptyForm(): BanquetForm {
     people_count: "10",
     event_type: "",
     prepayment: "",
+    payment_method_preset: "cash",
+    payment_method_custom: "",
+    payment_date: todayLocal(),
     dishes: "",
   };
 }
 
 function toForm(b: Banquet): BanquetForm {
+  const { preset, customText } = splitPaymentMethod(b.payment_method);
   return {
     event_date: b.event_date,
     event_time: b.event_time ?? "",
@@ -64,6 +79,9 @@ function toForm(b: Banquet): BanquetForm {
     people_count: String(b.people_count),
     event_type: b.event_type ?? "",
     prepayment: b.prepayment && parseFloat(b.prepayment) > 0 ? b.prepayment : "",
+    payment_method_preset: preset,
+    payment_method_custom: customText,
+    payment_date: b.payment_date ?? "",
     dishes: b.dishes ?? "",
   };
 }
@@ -106,17 +124,25 @@ export function BanquetsPage() {
     setDialogOpen(true);
   };
 
-  const buildPayload = () => ({
-    event_date: form.event_date,
-    event_time: form.event_time.trim() || null,
-    guest_name: form.guest_name.trim(),
-    phone: form.phone.trim() || null,
-    venue: form.venue.trim() || null,
-    people_count: Math.max(1, parseInt(form.people_count, 10) || 1),
-    event_type: form.event_type.trim() || null,
-    prepayment: form.prepayment.trim() || "0",
-    dishes: form.dishes.trim() || null,
-  });
+  const buildPayload = () => {
+    const prepayment = form.prepayment.trim() || "0";
+    const paid = parseFloat(prepayment) > 0;
+    return {
+      event_date: form.event_date,
+      event_time: form.event_time.trim() || null,
+      guest_name: form.guest_name.trim(),
+      phone: form.phone.trim() || null,
+      venue: form.venue.trim() || null,
+      people_count: Math.max(1, parseInt(form.people_count, 10) || 1),
+      event_type: form.event_type.trim() || null,
+      prepayment,
+      payment_method: paid
+        ? resolvePaymentMethod(form.payment_method_preset, form.payment_method_custom)
+        : null,
+      payment_date: paid ? form.payment_date || todayLocal() : null,
+      dishes: form.dishes.trim() || null,
+    };
+  };
 
   const validate = (): boolean => {
     if (!form.guest_name.trim()) {
@@ -126,6 +152,18 @@ export function BanquetsPage() {
     if (!form.event_date) {
       toast.error("Укажите дату проведения");
       return false;
+    }
+    if (parseFloat(form.prepayment || "0") > 0) {
+      if (!form.payment_date) {
+        toast.error("Укажите дату оплаты");
+        return false;
+      }
+      if (
+        !resolvePaymentMethod(form.payment_method_preset, form.payment_method_custom)
+      ) {
+        toast.error("Укажите способ оплаты");
+        return false;
+      }
     }
     return true;
   };
@@ -154,6 +192,7 @@ export function BanquetsPage() {
       setDialogOpen(false);
       setEditBanquet(null);
       queryClient.invalidateQueries({ queryKey: ["banquets"] });
+      queryClient.invalidateQueries({ queryKey: ["analytics"] });
     },
     onError: (e) => onError(e, "Не удалось сохранить"),
   });
@@ -164,6 +203,7 @@ export function BanquetsPage() {
       toast.success("Бронирование перемещено в корзину");
       queryClient.invalidateQueries({ queryKey: ["banquets"] });
       queryClient.invalidateQueries({ queryKey: ["crm-trash"] });
+      queryClient.invalidateQueries({ queryKey: ["analytics"] });
     },
     onError: (e) => onError(e, "Не удалось удалить"),
   });
@@ -205,7 +245,9 @@ export function BanquetsPage() {
                 <th className="px-4 py-3">Место</th>
                 <th className="px-4 py-3">Чел.</th>
                 <th className="px-4 py-3">Мероприятие</th>
-                <th className="px-4 py-3">Предоплата</th>
+                <th className="px-4 py-3">Оплата</th>
+                <th className="px-4 py-3">Способ</th>
+                <th className="px-4 py-3">Дата оплаты</th>
                 <th className="px-4 py-3">Блюда</th>
                 <th className="w-24 px-4 py-3"></th>
               </tr>
@@ -239,6 +281,10 @@ export function BanquetsPage() {
                     ) : (
                       <span className="text-muted-foreground">нет</span>
                     )}
+                  </td>
+                  <td className="px-4 py-3">{formatPaymentMethod(b.payment_method)}</td>
+                  <td className="px-4 py-3">
+                    {b.payment_date ? formatDate(b.payment_date) : "—"}
                   </td>
                   <td className="max-w-[280px] whitespace-pre-line px-4 py-3 text-xs text-muted-foreground">
                     {formatDishesPreview(b.dishes, { serviceCharge: true })}
@@ -353,17 +399,17 @@ export function BanquetsPage() {
                 placeholder="Банкетный зал / летняя терраса…"
               />
             </div>
+            <div className="space-y-2">
+              <Label>Тип мероприятия</Label>
+              <Input
+                value={form.event_type}
+                onChange={(e) => set("event_type")(e.target.value)}
+                placeholder="Свадьба, юбилей, корпоратив…"
+              />
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label>Тип мероприятия</Label>
-                <Input
-                  value={form.event_type}
-                  onChange={(e) => set("event_type")(e.target.value)}
-                  placeholder="Свадьба, юбилей, корпоратив…"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Предоплата, ₸</Label>
+                <Label>Сумма оплаты, ₸</Label>
                 <Input
                   type="number"
                   min={0}
@@ -372,7 +418,22 @@ export function BanquetsPage() {
                   placeholder="0"
                 />
               </div>
+              <div className="space-y-2">
+                <Label>Дата оплаты</Label>
+                <Input
+                  type="date"
+                  value={form.payment_date}
+                  onChange={(e) => set("payment_date")(e.target.value)}
+                  disabled={!form.prepayment || parseFloat(form.prepayment) <= 0}
+                />
+              </div>
             </div>
+            <PaymentMethodSelect
+              preset={form.payment_method_preset}
+              customText={form.payment_method_custom}
+              onPresetChange={(value) => set("payment_method_preset")(value)}
+              onCustomTextChange={(value) => set("payment_method_custom")(value)}
+            />
             <div className="space-y-2">
               <Label>Список заказных блюд</Label>
               <button

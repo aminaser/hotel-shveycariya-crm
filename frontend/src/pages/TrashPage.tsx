@@ -138,6 +138,13 @@ async function restoreSupabaseRow(table: "spa_bookings" | "requests", id: string
   if (!supabase) throw new Error("Supabase не настроен");
   const { error } = await supabase.from(table).update({ deleted_at: null }).eq("id", id);
   if (error) throw new Error(error.message);
+  if (table === "spa_bookings") {
+    try {
+      await apiFetch(`/spa-payments/${id}/restore`, { method: "POST" });
+    } catch {
+      // Payment row may not exist for older bookings.
+    }
+  }
 }
 
 function formatDateTime(iso: string): string {

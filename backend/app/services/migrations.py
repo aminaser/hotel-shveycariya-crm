@@ -34,6 +34,12 @@ BANQUET_COLUMNS = {
     "updated_by_user_id": "INTEGER",
     "updated_by_name": "VARCHAR(255)",
     "payment_method": "VARCHAR(64)",
+    "payment_date": "DATE",
+}
+
+TAKEAWAY_COLUMNS = {
+    "payment_method": "VARCHAR(64)",
+    "payment_date": "DATE",
 }
 
 STAY_COLUMNS = {
@@ -136,6 +142,9 @@ def run_migrations() -> None:
 
         for column, col_type in BANQUET_COLUMNS.items():
             _add_column_if_missing(conn, "banquets", column, col_type)
+
+        for column, col_type in TAKEAWAY_COLUMNS.items():
+            _add_column_if_missing(conn, "takeaway_orders", column, col_type)
 
         for column, col_type in STAY_COLUMNS.items():
             _add_column_if_missing(conn, "stays", column, col_type)

@@ -10,9 +10,12 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
 from app.core.permissions import require_analytics_owner
+from app.models.banquet import Banquet
 from app.models.employee import Employee
 from app.models.room import Room, RoomStatus
+from app.models.spa_booking_payment import SpaBookingPayment
 from app.models.stay import PaymentStatus, Stay, StayType
+from app.models.takeaway_order import TakeawayOrder
 from app.models.timesheet_shift import TimesheetShift
 from app.models.user import User
 from app.schemas.analytics import (
@@ -40,21 +43,29 @@ def _payment_day(stay: Stay) -> date | None:
     return stay.payment_date
 
 
+def _add_method_amount(
+    breakdown: PaymentBreakdown, method: str | None, amount: Decimal
+) -> None:
+    if amount <= 0:
+        return
+    key = method or "other"
+    if key == "cash":
+        breakdown.cash += amount
+    elif key == "kaspi":
+        breakdown.kaspi += amount
+    elif key == "halyk":
+        breakdown.halyk += amount
+    else:
+        breakdown.other += amount
+
+
 def _payment_breakdown(stays: list[Stay]) -> PaymentBreakdown:
     breakdown = PaymentBreakdown()
     for stay in stays:
         amount = received_payment_amount(stay)
         if amount <= 0:
             continue
-        method = stay.payment_method or "other"
-        if method == "cash":
-            breakdown.cash += amount
-        elif method == "kaspi":
-            breakdown.kaspi += amount
-        elif method == "halyk":
-            breakdown.halyk += amount
-        else:
-            breakdown.other += amount
+        _add_method_amount(breakdown, stay.payment_method, amount)
     return breakdown
 
 
@@ -104,6 +115,42 @@ def get_analytics(
     )
     paid_stays = list(revenue_candidates)
 
+    paid_banquets = (
+        db.query(Banquet)
+        .filter(
+            Banquet.deleted_at.is_(None),
+            Banquet.payment_date.isnot(None),
+            Banquet.payment_date >= date_from,
+            Banquet.payment_date <= today,
+            Banquet.prepayment > 0,
+        )
+        .all()
+    )
+
+    paid_takeaways = (
+        db.query(TakeawayOrder)
+        .filter(
+            TakeawayOrder.deleted_at.is_(None),
+            TakeawayOrder.payment_date.isnot(None),
+            TakeawayOrder.payment_date >= date_from,
+            TakeawayOrder.payment_date <= today,
+            TakeawayOrder.prepayment > 0,
+        )
+        .all()
+    )
+
+    paid_spa = (
+        db.query(SpaBookingPayment)
+        .filter(
+            SpaBookingPayment.deleted_at.is_(None),
+            SpaBookingPayment.payment_date.isnot(None),
+            SpaBookingPayment.payment_date >= date_from,
+            SpaBookingPayment.payment_date <= today,
+            SpaBookingPayment.amount > 0,
+        )
+        .all()
+    )
+
     all_stays_in_period = stays
 
     daily: dict = defaultdict(
@@ -126,6 +173,30 @@ def get_analytics(
         day = _payment_day(stay)
         if day is not None:
             daily[day]["revenue"] += received_payment_amount(stay)
+
+    banquet_revenue = Decimal("0")
+    for banquet in paid_banquets:
+        amount = banquet.prepayment or Decimal("0")
+        if amount <= 0 or banquet.payment_date is None:
+            continue
+        banquet_revenue += amount
+        daily[banquet.payment_date]["revenue"] += amount
+
+    takeaway_revenue = Decimal("0")
+    for order in paid_takeaways:
+        amount = order.prepayment or Decimal("0")
+        if amount <= 0 or order.payment_date is None:
+            continue
+        takeaway_revenue += amount
+        daily[order.payment_date]["revenue"] += amount
+
+    spa_revenue = Decimal("0")
+    for payment in paid_spa:
+        amount = payment.amount or Decimal("0")
+        if amount <= 0 or payment.payment_date is None:
+            continue
+        spa_revenue += amount
+        daily[payment.payment_date]["revenue"] += amount
 
     checkout_stays = (
         db.query(Stay)
@@ -189,7 +260,8 @@ def get_analytics(
         )
         cursor += timedelta(days=1)
 
-    total_revenue = sum((received_payment_amount(s) for s in paid_stays), Decimal("0"))
+    hotel_revenue = sum((received_payment_amount(s) for s in paid_stays), Decimal("0"))
+    total_revenue = hotel_revenue + banquet_revenue + takeaway_revenue + spa_revenue
     total_checkins = sum(
         1 for s in all_stays_in_period if s.stay_type in (StayType.booking, StayType.alumni)
     )
@@ -207,6 +279,37 @@ def get_analytics(
         Decimal("0"),
     )
     unpaid_stays = outstanding_stays
+
+    unpaid_banquets = (
+        db.query(Banquet)
+        .filter(
+            Banquet.deleted_at.is_(None),
+            Banquet.event_date >= date_from,
+            Banquet.event_date <= today,
+            Banquet.payment_date.is_(None),
+        )
+        .all()
+    )
+    unpaid_takeaways = (
+        db.query(TakeawayOrder)
+        .filter(
+            TakeawayOrder.deleted_at.is_(None),
+            TakeawayOrder.order_date >= date_from,
+            TakeawayOrder.order_date <= today,
+            TakeawayOrder.payment_date.is_(None),
+        )
+        .all()
+    )
+    unpaid_spa = (
+        db.query(SpaBookingPayment)
+        .filter(
+            SpaBookingPayment.deleted_at.is_(None),
+            SpaBookingPayment.amount > 0,
+            SpaBookingPayment.payment_date.is_(None),
+        )
+        .count()
+    )
+    unpaid_extra_count = len(unpaid_banquets) + len(unpaid_takeaways) + unpaid_spa
 
     total_rooms = db.query(Room).count() or 1
     occupied = db.query(Room).filter(Room.status == RoomStatus.occupied).count()
@@ -278,6 +381,20 @@ def get_analytics(
         reverse=True,
     )
 
+    payments_by_method = _payment_breakdown(paid_stays)
+    for banquet in paid_banquets:
+        _add_method_amount(
+            payments_by_method, banquet.payment_method, banquet.prepayment or Decimal("0")
+        )
+    for order in paid_takeaways:
+        _add_method_amount(
+            payments_by_method, order.payment_method, order.prepayment or Decimal("0")
+        )
+    for payment in paid_spa:
+        _add_method_amount(
+            payments_by_method, payment.payment_method, payment.amount or Decimal("0")
+        )
+
     summary = AnalyticsSummary(
         period_days=period,
         date_from=date_from,
@@ -290,8 +407,12 @@ def get_analytics(
         avg_daily_salary=avg_daily_salary.quantize(Decimal("0.01")),
         occupancy_rate=occupancy_rate,
         unpaid_amount=unpaid_amount,
-        unpaid_count=len(unpaid_stays),
-        payments_by_method=_payment_breakdown(paid_stays),
+        unpaid_count=len(unpaid_stays) + unpaid_extra_count,
+        payments_by_method=payments_by_method,
+        hotel_revenue=hotel_revenue,
+        banquet_revenue=banquet_revenue,
+        takeaway_revenue=takeaway_revenue,
+        spa_revenue=spa_revenue,
         bookings_count=sum(1 for s in all_stays_in_period if s.stay_type == StayType.booking),
         extensions_count=sum(
             1 for s in all_stays_in_period if s.stay_type == StayType.extension

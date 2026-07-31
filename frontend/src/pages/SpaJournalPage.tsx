@@ -7,6 +7,7 @@ import { apiFetch, ApiError } from "@/api/client";
 import type { Stay } from "@/api/types";
 import { AuthorFilter } from "@/components/AuthorFilter";
 import { AuthorshipMeta } from "@/components/AuthorshipMeta";
+import { PaymentMethodSelect } from "@/components/PaymentMethodSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,11 +28,20 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { logClientActivity } from "@/lib/activity";
+import { todayLocal as todayLocalShared } from "@/lib/dates";
+import { formatMoney } from "@/lib/format";
+import {
+  formatPaymentMethod,
+  resolvePaymentMethod,
+  splitPaymentMethod,
+  type PaymentMethodPreset,
+} from "@/lib/payment-method";
 import { canManagePrices, useAuthStore, type AuthUser } from "@/stores/auth";
 import {
   type SpaBooking,
   type SpaBookingCreate,
   type SpaBookingStatus,
+  type SpaPayment,
   type SpaService,
   isSupabaseConfigured,
   supabase,
@@ -74,6 +84,24 @@ const SOURCE_LABEL: Record<string, string> = {
   walk_in: "Вне отеля",
 };
 
+interface SpaForm {
+  booking_date: string;
+  slot_time: string;
+  service: SpaService;
+  guest_name: string;
+  guest_phone: string;
+  room: string;
+  is_hotel_guest: boolean;
+  people_count: number;
+  status: SpaBookingStatus;
+  source: string;
+  notes: string;
+  amount: string;
+  payment_method_preset: PaymentMethodPreset | string;
+  payment_method_custom: string;
+  payment_date: string;
+}
+
 function toIsoDate(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -99,11 +127,7 @@ function monthBehind(): string {
   return daysOffset(-30);
 }
 
-function emptyForm(prices: SpaPrices = DEFAULT_SPA_PRICES): SpaBookingCreate & {
-  guest_phone: string;
-  room: string;
-  notes: string;
-} {
+function emptyForm(prices: SpaPrices = DEFAULT_SPA_PRICES): SpaForm {
   return {
     booking_date: todayLocal(),
     slot_time: "16:00",
@@ -116,7 +140,10 @@ function emptyForm(prices: SpaPrices = DEFAULT_SPA_PRICES): SpaBookingCreate & {
     status: "confirmed",
     source: "walk_in",
     notes: "",
-    price: prices.sauna,
+    amount: String(prices.sauna),
+    payment_method_preset: "cash",
+    payment_method_custom: "",
+    payment_date: todayLocalShared(),
   };
 }
 
@@ -131,23 +158,93 @@ async function fetchBookings(dateFrom: string, dateTo: string): Promise<SpaBooki
     .order("booking_date", { ascending: false })
     .order("slot_time", { ascending: false });
   if (error) throw new Error(error.message);
-  return (data ?? []) as SpaBooking[];
+  const bookings = (data ?? []) as SpaBooking[];
+  if (bookings.length === 0) return bookings;
+
+  const ids = bookings.map((b) => b.id).join(",");
+  try {
+    const payments = await apiFetch<SpaPayment[]>(`/spa-payments?booking_ids=${ids}`);
+    const byId = new Map(payments.map((p) => [p.booking_id, p]));
+    return bookings.map((booking) => {
+      const payment = byId.get(booking.id);
+      if (!payment) {
+        return { ...booking, payment_method: null, payment_date: null };
+      }
+      return {
+        ...booking,
+        price: Number(payment.amount) || booking.price,
+        payment_method: payment.payment_method,
+        payment_date: payment.payment_date,
+      };
+    });
+  } catch {
+    return bookings.map((booking) => ({
+      ...booking,
+      payment_method: null,
+      payment_date: null,
+    }));
+  }
 }
 
-async function createBooking(payload: SpaBookingCreate, authorName: string) {
-  if (!supabase) throw new Error("Supabase не настроен");
-  const { error } = await supabase.from("spa_bookings").insert({
-    ...payload,
-    guest_phone: payload.guest_phone || null,
-    room: payload.room || null,
-    notes: payload.notes || null,
-    created_by_name: authorName,
-    updated_by_name: authorName,
+async function upsertSpaPayment(payload: {
+  booking_id: string;
+  amount: number;
+  payment_method: string | null;
+  payment_date: string | null;
+}) {
+  await apiFetch("/spa-payments", {
+    method: "PUT",
+    body: JSON.stringify({
+      booking_id: payload.booking_id,
+      amount: String(payload.amount),
+      payment_method: payload.payment_method,
+      payment_date: payload.payment_date,
+    }),
   });
-  if (error) throw new Error(error.message);
 }
 
-async function updateBooking(id: string, payload: SpaBookingCreate, authorName: string) {
+async function createBooking(
+  payload: SpaBookingCreate,
+  authorName: string,
+  payment: {
+    amount: number;
+    payment_method: string | null;
+    payment_date: string | null;
+  },
+) {
+  if (!supabase) throw new Error("Supabase не настроен");
+  const { data, error } = await supabase
+    .from("spa_bookings")
+    .insert({
+      ...payload,
+      guest_phone: payload.guest_phone || null,
+      room: payload.room || null,
+      notes: payload.notes || null,
+      created_by_name: authorName,
+      updated_by_name: authorName,
+    })
+    .select("id")
+    .single();
+  if (error) throw new Error(error.message);
+  if (!data?.id) throw new Error("Не удалось получить id записи");
+  await upsertSpaPayment({
+    booking_id: data.id,
+    amount: payment.amount,
+    payment_method: payment.payment_method,
+    payment_date: payment.payment_date,
+  });
+}
+
+async function updateBooking(
+  id: string,
+  payload: SpaBookingCreate,
+  authorName: string,
+  payment: {
+    amount: number;
+    payment_method: string | null;
+    payment_date: string | null;
+  },
+) {
   if (!supabase) throw new Error("Supabase не настроен");
   const { error } = await supabase
     .from("spa_bookings")
@@ -160,6 +257,12 @@ async function updateBooking(id: string, payload: SpaBookingCreate, authorName: 
     })
     .eq("id", id);
   if (error) throw new Error(error.message);
+  await upsertSpaPayment({
+    booking_id: id,
+    amount: payment.amount,
+    payment_method: payment.payment_method,
+    payment_date: payment.payment_date,
+  });
 }
 
 async function softDeleteBooking(id: string, authorName: string) {
@@ -169,6 +272,11 @@ async function softDeleteBooking(id: string, authorName: string) {
     .update({ deleted_at: new Date().toISOString(), updated_by_name: authorName })
     .eq("id", id);
   if (error) throw new Error(error.message);
+  try {
+    await apiFetch(`/spa-payments/${id}`, { method: "DELETE" });
+  } catch {
+    // Payment row may not exist for older bookings.
+  }
 }
 
 
@@ -313,28 +421,38 @@ export function SpaJournalPage() {
   const invalidateBookings = () => {
     void queryClient.invalidateQueries({ queryKey: ["spa-bookings"] });
     void queryClient.invalidateQueries({ queryKey: ["spa-bookings-trash"] });
+    void queryClient.invalidateQueries({ queryKey: ["analytics"] });
+    void queryClient.invalidateQueries({ queryKey: ["bookings-spa"] });
   };
 
   const saveMutation = useMutation({
-    mutationFn: (payload: SpaBookingCreate) =>
+    mutationFn: ({
+      payload,
+      payment,
+    }: {
+      payload: SpaBookingCreate;
+      payment: {
+        amount: number;
+        payment_method: string | null;
+        payment_date: string | null;
+      };
+    }) =>
       editingId
-        ? updateBooking(editingId, payload, authorName)
-        : createBooking(payload, authorName),
-    onSuccess: (_data, payload) => {
+        ? updateBooking(editingId, payload, authorName, payment)
+        : createBooking(payload, authorName, payment),
+    onSuccess: (_data, vars) => {
       toast.success(editingId ? "Запись обновлена" : "Запись добавлена в журнал");
       void logClientActivity({
         action: editingId ? "Изменила запись сауны/бани" : "Создала запись сауны/бани",
         entity_type: "spa",
-        entity_label: `${payload.service}: ${payload.guest_name}`,
-        new_value: `${payload.booking_date} ${payload.slot_time}`,
+        entity_label: `${vars.payload.service}: ${vars.payload.guest_name}`,
+        new_value: `${vars.payload.booking_date} ${vars.payload.slot_time}`,
       });
       setDialogOpen(false);
       setEditingId(null);
       setForm(emptyForm(spaPrices));
-      // Widen the date filter so the freshly saved booking is visible
-      // even if it is outside the current range.
-      if (payload.booking_date < dateFrom) setDateFrom(payload.booking_date);
-      if (payload.booking_date > dateTo) setDateTo(payload.booking_date);
+      if (vars.payload.booking_date < dateFrom) setDateFrom(vars.payload.booking_date);
+      if (vars.payload.booking_date > dateTo) setDateTo(vars.payload.booking_date);
       invalidateBookings();
     },
     onError: (err: Error) => toast.error(err.message),
@@ -406,25 +524,54 @@ export function SpaJournalPage() {
       toast.error("Укажите имя гостя");
       return;
     }
+    const amount = Math.max(0, Number(form.amount) || 0);
+    if (amount > 0) {
+      if (!form.payment_date) {
+        toast.error("Укажите дату оплаты");
+        return;
+      }
+      if (!resolvePaymentMethod(form.payment_method_preset, form.payment_method_custom)) {
+        toast.error("Укажите способ оплаты");
+        return;
+      }
+    }
+    const paymentMethod =
+      amount > 0
+        ? resolvePaymentMethod(form.payment_method_preset, form.payment_method_custom)
+        : null;
+    const paymentDate = amount > 0 ? form.payment_date || todayLocalShared() : null;
+
     saveMutation.mutate({
-      booking_date: form.booking_date,
-      slot_time: form.slot_time,
-      service: form.service,
-      guest_name: form.guest_name.trim(),
-      guest_phone: form.guest_phone.trim() || null,
-      room: form.is_hotel_guest ? form.room.trim() || null : null,
-      is_hotel_guest: form.is_hotel_guest,
-      people_count: Number(form.people_count) || 1,
-      status: form.status ?? "confirmed",
-      source: form.is_hotel_guest ? "crm" : "walk_in",
-      notes: form.notes.trim() || null,
-      price: Number(form.price) || spaPrices[form.service] || 0,
+      payload: {
+        booking_date: form.booking_date,
+        slot_time: form.slot_time,
+        service: form.service,
+        guest_name: form.guest_name.trim(),
+        guest_phone: form.guest_phone.trim() || null,
+        room: form.is_hotel_guest ? form.room.trim() || null : null,
+        is_hotel_guest: form.is_hotel_guest,
+        people_count: Number(form.people_count) || 1,
+        status: form.status ?? "confirmed",
+        source: form.is_hotel_guest ? "crm" : "walk_in",
+        notes: form.notes.trim() || null,
+        price: amount,
+      },
+      payment: {
+        amount,
+        payment_method: paymentMethod,
+        payment_date: paymentDate,
+      },
     });
   };
 
   const openEdit = (booking: SpaBooking) => {
     setEditingId(booking.id);
     setSelectedStayId("");
+    const { preset, customText } = splitPaymentMethod(booking.payment_method);
+    const amount =
+      booking.price != null && booking.price > 0
+        ? String(booking.price)
+        : String(spaPrices[booking.service] ?? 0);
     setForm({
       booking_date: booking.booking_date,
       slot_time: booking.slot_time,
@@ -437,7 +584,10 @@ export function SpaJournalPage() {
       status: booking.status,
       source: booking.source,
       notes: booking.notes ?? "",
-      price: booking.price ?? spaPrices[booking.service] ?? 0,
+      amount,
+      payment_method_preset: preset,
+      payment_method_custom: customText,
+      payment_date: booking.payment_date ?? todayLocalShared(),
     });
     setDialogOpen(true);
   };
@@ -605,11 +755,19 @@ export function SpaJournalPage() {
                 {booking.notes && (
                   <div className="text-sm text-muted-foreground">{booking.notes}</div>
                 )}
-                {booking.price != null && (
-                  <div className="text-xs text-muted-foreground">
-                    {booking.price.toLocaleString("ru-RU")} ₸
-                  </div>
-                )}
+                <div className="text-xs text-muted-foreground">
+                  {booking.payment_date && booking.price != null && booking.price > 0 ? (
+                    <>
+                      Сумма: {formatMoney(booking.price)}
+                      {booking.payment_method
+                        ? ` · ${formatPaymentMethod(booking.payment_method)}`
+                        : ""}
+                      {` · оплата ${formatDate(booking.payment_date)}`}
+                    </>
+                  ) : (
+                    "Оплата не указана"
+                  )}
+                </div>
                 <AuthorshipMeta
                   createdByName={booking.created_by_name}
                   createdAt={booking.created_at}
@@ -719,7 +877,7 @@ export function SpaJournalPage() {
                     setForm((prev) => ({
                       ...prev,
                       service,
-                      price: spaPrices[service],
+                      amount: String(spaPrices[service]),
                     }));
                   }}
                 >
@@ -830,30 +988,39 @@ export function SpaJournalPage() {
                   <Input value={form.room} readOnly placeholder="Выберите гостя" />
                 </div>
               ) : (
-                <div className="space-y-2">
-                  <Label>Цена, ₸</Label>
-                  <Input
-                    type="number"
-                    value={form.price ?? spaPrices[form.service]}
-                    onChange={(e) =>
-                      setForm((prev) => ({ ...prev, price: Number(e.target.value) || 0 }))
-                    }
-                  />
-                </div>
+                <div />
               )}
             </div>
-            {form.is_hotel_guest && (
+            <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label>Цена, ₸</Label>
+                <Label>Сумма, ₸</Label>
                 <Input
                   type="number"
-                  value={form.price ?? spaPrices[form.service]}
-                  onChange={(e) =>
-                    setForm((prev) => ({ ...prev, price: Number(e.target.value) || 0 }))
-                  }
+                  min={0}
+                  value={form.amount}
+                  onChange={(e) => setForm((prev) => ({ ...prev, amount: e.target.value }))}
                 />
               </div>
-            )}
+              <div className="space-y-2">
+                <Label>Дата оплаты</Label>
+                <Input
+                  type="date"
+                  value={form.payment_date}
+                  onChange={(e) => setForm((prev) => ({ ...prev, payment_date: e.target.value }))}
+                  disabled={!form.amount || Number(form.amount) <= 0}
+                />
+              </div>
+            </div>
+            <PaymentMethodSelect
+              preset={form.payment_method_preset}
+              customText={form.payment_method_custom}
+              onPresetChange={(value) =>
+                setForm((prev) => ({ ...prev, payment_method_preset: value }))
+              }
+              onCustomTextChange={(value) =>
+                setForm((prev) => ({ ...prev, payment_method_custom: value }))
+              }
+            />
 
             <div className="space-y-2">
               <Label>Заметки</Label>

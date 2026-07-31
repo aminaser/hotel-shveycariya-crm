@@ -8,6 +8,7 @@ import type { TakeawayOrder } from "@/api/types";
 import { AuthorFilter } from "@/components/AuthorFilter";
 import { AuthorshipMeta } from "@/components/AuthorshipMeta";
 import { BanquetMenuSheet } from "@/components/BanquetMenuSheet";
+import { PaymentMethodSelect } from "@/components/PaymentMethodSelect";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,7 +20,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { dishesTotal, formatDishesPreview, parseDishes } from "@/lib/banquet-dishes";
+import { todayLocal } from "@/lib/dates";
 import { formatDate, formatMoney } from "@/lib/format";
+import {
+  formatPaymentMethod,
+  resolvePaymentMethod,
+  splitPaymentMethod,
+  type PaymentMethodPreset,
+} from "@/lib/payment-method";
 import { cn } from "@/lib/utils";
 
 interface TakeawayForm {
@@ -28,27 +36,37 @@ interface TakeawayForm {
   guest_name: string;
   phone: string;
   prepayment: string;
+  payment_method_preset: PaymentMethodPreset | string;
+  payment_method_custom: string;
+  payment_date: string;
   dishes: string;
 }
 
 function emptyForm(): TakeawayForm {
   return {
-    order_date: new Date().toISOString().slice(0, 10),
+    order_date: todayLocal(),
     order_time: "",
     guest_name: "",
     phone: "",
     prepayment: "",
+    payment_method_preset: "cash",
+    payment_method_custom: "",
+    payment_date: todayLocal(),
     dishes: "",
   };
 }
 
 function toForm(o: TakeawayOrder): TakeawayForm {
+  const { preset, customText } = splitPaymentMethod(o.payment_method);
   return {
     order_date: o.order_date,
     order_time: o.order_time ?? "",
     guest_name: o.guest_name,
     phone: o.phone ?? "",
     prepayment: o.prepayment && parseFloat(o.prepayment) > 0 ? o.prepayment : "",
+    payment_method_preset: preset,
+    payment_method_custom: customText,
+    payment_date: o.payment_date ?? "",
     dishes: o.dishes ?? "",
   };
 }
@@ -89,14 +107,22 @@ export function TakeawayOrdersPage() {
     setDialogOpen(true);
   };
 
-  const buildPayload = () => ({
-    order_date: form.order_date,
-    order_time: form.order_time.trim() || null,
-    guest_name: form.guest_name.trim(),
-    phone: form.phone.trim() || null,
-    prepayment: form.prepayment.trim() || "0",
-    dishes: form.dishes.trim() || null,
-  });
+  const buildPayload = () => {
+    const prepayment = form.prepayment.trim() || "0";
+    const paid = parseFloat(prepayment) > 0;
+    return {
+      order_date: form.order_date,
+      order_time: form.order_time.trim() || null,
+      guest_name: form.guest_name.trim(),
+      phone: form.phone.trim() || null,
+      prepayment,
+      payment_method: paid
+        ? resolvePaymentMethod(form.payment_method_preset, form.payment_method_custom)
+        : null,
+      payment_date: paid ? form.payment_date || todayLocal() : null,
+      dishes: form.dishes.trim() || null,
+    };
+  };
 
   const validate = (): boolean => {
     if (!form.guest_name.trim()) {
@@ -106,6 +132,18 @@ export function TakeawayOrdersPage() {
     if (!form.order_date) {
       toast.error("Укажите дату заказа");
       return false;
+    }
+    if (parseFloat(form.prepayment || "0") > 0) {
+      if (!form.payment_date) {
+        toast.error("Укажите дату оплаты");
+        return false;
+      }
+      if (
+        !resolvePaymentMethod(form.payment_method_preset, form.payment_method_custom)
+      ) {
+        toast.error("Укажите способ оплаты");
+        return false;
+      }
     }
     return true;
   };
@@ -134,6 +172,7 @@ export function TakeawayOrdersPage() {
       setDialogOpen(false);
       setEditOrder(null);
       queryClient.invalidateQueries({ queryKey: ["takeaway-orders"] });
+      queryClient.invalidateQueries({ queryKey: ["analytics"] });
     },
     onError: (e) => onError(e, "Не удалось сохранить"),
   });
@@ -144,6 +183,7 @@ export function TakeawayOrdersPage() {
       toast.success("Заказ перемещён в корзину");
       queryClient.invalidateQueries({ queryKey: ["takeaway-orders"] });
       queryClient.invalidateQueries({ queryKey: ["crm-trash"] });
+      queryClient.invalidateQueries({ queryKey: ["analytics"] });
     },
     onError: (e) => onError(e, "Не удалось удалить"),
   });
@@ -182,7 +222,9 @@ export function TakeawayOrdersPage() {
                 <th className="px-4 py-3">Время</th>
                 <th className="px-4 py-3">Клиент</th>
                 <th className="px-4 py-3">Телефон</th>
-                <th className="px-4 py-3">Предоплата</th>
+                <th className="px-4 py-3">Оплата</th>
+                <th className="px-4 py-3">Способ</th>
+                <th className="px-4 py-3">Дата оплаты</th>
                 <th className="px-4 py-3">Блюда</th>
                 <th className="w-24 px-4 py-3"></th>
               </tr>
@@ -211,6 +253,10 @@ export function TakeawayOrdersPage() {
                     ) : (
                       <span className="text-muted-foreground">нет</span>
                     )}
+                  </td>
+                  <td className="px-4 py-3">{formatPaymentMethod(o.payment_method)}</td>
+                  <td className="px-4 py-3">
+                    {o.payment_date ? formatDate(o.payment_date) : "—"}
                   </td>
                   <td className="max-w-[280px] whitespace-pre-line px-4 py-3 text-xs text-muted-foreground">
                     {formatDishesPreview(o.dishes)}
@@ -307,7 +353,7 @@ export function TakeawayOrdersPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Предоплата, ₸</Label>
+                <Label>Сумма оплаты, ₸</Label>
                 <Input
                   type="number"
                   min={0}
@@ -317,6 +363,21 @@ export function TakeawayOrdersPage() {
                 />
               </div>
             </div>
+            <div className="space-y-2">
+              <Label>Дата оплаты</Label>
+              <Input
+                type="date"
+                value={form.payment_date}
+                onChange={(e) => set("payment_date")(e.target.value)}
+                disabled={!form.prepayment || parseFloat(form.prepayment) <= 0}
+              />
+            </div>
+            <PaymentMethodSelect
+              preset={form.payment_method_preset}
+              customText={form.payment_method_custom}
+              onPresetChange={(value) => set("payment_method_preset")(value)}
+              onCustomTextChange={(value) => set("payment_method_custom")(value)}
+            />
             <div className="space-y-2">
               <Label>Блюда из меню на вынос</Label>
               <button
