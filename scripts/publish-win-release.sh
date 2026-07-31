@@ -19,18 +19,40 @@ if [[ ! -f "$REL/latest.yml" ]]; then
   exit 1
 fi
 
-# Prefer Setup exe; names come from electron-builder (see latest.yml)
-SETUP=$(ls "$REL"/*Setup*.exe "$REL"/*setup*.exe 2>/dev/null | head -1 || true)
-BLOCKMAP=$(ls "$REL"/*.exe.blockmap 2>/dev/null | head -1 || true)
+# Exact artifact name from latest.yml (what electron-updater will download).
+SETUP_NAME=$(awk '/^path:/{print $2; exit}' "$REL/latest.yml" | tr -d "'\"")
+if [[ -z "$SETUP_NAME" ]]; then
+  echo "Could not read path from latest.yml"
+  exit 1
+fi
 
-if [[ -z "$SETUP" ]]; then
-  echo "No Setup .exe found in $REL"
+SETUP="$REL/$SETUP_NAME"
+BLOCKMAP="$REL/${SETUP_NAME}.blockmap"
+
+# electron-builder may emit spaced names; rename to match latest.yml.
+if [[ ! -f "$SETUP" ]]; then
+  VERSION="${SETUP_NAME##*-}"
+  VERSION="${VERSION%.exe}"
+  CANDIDATE=$(find "$REL" -maxdepth 1 -type f -name "*Setup*${VERSION}.exe" ! -name '*.blockmap' | head -1 || true)
+  if [[ -n "$CANDIDATE" ]]; then
+    echo "Renaming $(basename "$CANDIDATE") -> $SETUP_NAME"
+    mv "$CANDIDATE" "$SETUP"
+    if [[ -f "${CANDIDATE}.blockmap" ]]; then
+      mv "${CANDIDATE}.blockmap" "$BLOCKMAP"
+    fi
+  fi
+fi
+
+if [[ ! -f "$SETUP" ]]; then
+  echo "Missing setup file: $SETUP"
   exit 1
 fi
 
 FILES=("$REL/latest.yml" "$SETUP")
-if [[ -n "$BLOCKMAP" ]]; then
+if [[ -f "$BLOCKMAP" ]]; then
   FILES+=("$BLOCKMAP")
+else
+  echo "Warning: missing blockmap $BLOCKMAP"
 fi
 
 echo "Creating/updating release $TAG with:"
