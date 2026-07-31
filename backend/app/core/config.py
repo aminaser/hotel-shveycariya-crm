@@ -16,12 +16,19 @@ BACKUPS_DIR = DATA_DIR / "backups"
 BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Load .env from the backend package dir (cwd may differ).
-_ENV_FILE = ROOT_DIR / ".env"
+# Packaged Electron runs with cwd=resources/backend, so prefer that path.
+_BACKEND_DIR = Path(__file__).resolve().parents[2]
+_ENV_CANDIDATES = (
+    _BACKEND_DIR / ".env",
+    ROOT_DIR / ".env",
+    Path(".env"),
+)
+_ENV_FILE = next((path for path in _ENV_CANDIDATES if path.is_file()), _BACKEND_DIR / ".env")
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(_ENV_FILE) if _ENV_FILE.exists() else ".env",
+        env_file=str(_ENV_FILE) if _ENV_FILE.is_file() else ".env",
         extra="ignore",
     )
 
