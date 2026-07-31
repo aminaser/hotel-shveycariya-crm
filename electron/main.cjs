@@ -270,6 +270,13 @@ async function createWindow() {
 }
 
 ipcMain.handle("get-app-path", () => app.getPath("userData"));
+ipcMain.handle("relaunch-app", () => {
+  // Full process restart so SQLite reopens the restored DB file.
+  isInstallingUpdate = true;
+  stopBackend();
+  app.relaunch();
+  app.exit(0);
+});
 ipcMain.handle("check-for-updates", async () => {
   if (isDev || isPortable) {
     return { ok: false, reason: "updates_unavailable" };

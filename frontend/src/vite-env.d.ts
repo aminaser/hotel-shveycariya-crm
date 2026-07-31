@@ -16,6 +16,7 @@ declare global {
     electronAPI?: {
       isElectron: boolean;
       getAppPath: () => Promise<string>;
+      relaunchApp: () => Promise<void>;
       checkForUpdates: () => Promise<{
         ok: boolean;
         version?: string | null;

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFil
 from sqlalchemy.orm import Session
 
 from app.core.config import BACKUPS_DIR, DATA_DIR, settings
-from app.core.database import get_db
+from app.core.database import engine, get_db
 from app.core.deps import get_current_user
 from app.core.permissions import require_owner
 from app.core.security import get_password_hash, verify_password
@@ -173,8 +173,49 @@ async def restore_backup(
     if not contents.startswith(SQLITE_HEADER):
         raise HTTPException(status_code=400, detail="Файл не является базой SQLite")
 
+    # Validate uploaded file is a readable SQLite DB before swapping.
     temp_path = BACKUPS_DIR / f"restore_{datetime.now(timezone.utc).timestamp()}.db"
     temp_path.write_bytes(contents)
+    try:
+        probe = sqlite3.connect(str(temp_path))
+        try:
+            probe.execute("PRAGMA schema_version")
+            tables = {
+                row[0]
+                for row in probe.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+        finally:
+            probe.close()
+    except sqlite3.Error as exc:
+        temp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"Повреждённый файл базы: {exc}") from exc
+
+    if "users" not in tables:
+        temp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="В файле нет таблиц CRM")
+
+    # Close ORM sessions / pooled connections so WAL cannot overwrite the restore.
+    db.close()
+    engine.dispose()
+
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(str(DB_PATH) + suffix)
+        try:
+            sidecar.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     shutil.copy2(temp_path, DB_PATH)
     temp_path.unlink(missing_ok=True)
+
+    # Make sure no leftover WAL from the copy target remains.
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(str(DB_PATH) + suffix)
+        try:
+            sidecar.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     return Response(status_code=status.HTTP_204_NO_CONTENT)

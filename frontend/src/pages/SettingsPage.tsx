@@ -119,10 +119,28 @@ export function SettingsPage() {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: formData,
       });
-      if (!response.ok) throw new Error("restore failed");
+      if (!response.ok) {
+        let message = "Не удалось восстановить базу";
+        try {
+          const body = (await response.json()) as { detail?: string };
+          if (body.detail) message = body.detail;
+        } catch {
+          // ignore
+        }
+        throw new Error(message);
+      }
     },
-    onSuccess: () => toast.success("База восстановлена. Перезагрузите приложение."),
-    onError: () => toast.error("Ошибка восстановления"),
+    onSuccess: async () => {
+      toast.success("База восстановлена. Перезапуск приложения…");
+      queryClient.clear();
+      if (window.electronAPI?.relaunchApp) {
+        await window.electronAPI.relaunchApp();
+        return;
+      }
+      window.location.reload();
+    },
+    onError: (e) =>
+      toast.error(e instanceof Error ? e.message : "Ошибка восстановления"),
   });
 
   if (!settings) return <div className="p-6">Загрузка...</div>;
@@ -387,6 +405,11 @@ export function SettingsPage() {
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
             База данных: {settings.database_path}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            После «Восстановить из .db» приложение полностью перезапустится. Не
+            закрывайте CRM вручную сразу после выбора файла — иначе старая пустая
+            база может затереть бэкап.
           </p>
           {window.electronAPI?.isElectron && (
             <p className="text-xs text-muted-foreground">
