@@ -83,3 +83,21 @@ class TimesheetDaySummary(BaseModel):
     total_hours: Decimal
     total_salary: Decimal
     shifts: list[ShiftResponse]
+
+
+class EmployeeWeekStat(BaseModel):
+    employee_id: int
+    employee_name: str
+    position: str
+    shifts_count: int
+    total_hours: Decimal
+    total_salary: Decimal
+
+
+class TimesheetWeekSummary(BaseModel):
+    date_from: date
+    date_to: date
+    total_hours: Decimal
+    total_salary: Decimal
+    shifts: list[ShiftResponse]
+    by_employee: list[EmployeeWeekStat]

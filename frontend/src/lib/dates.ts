@@ -75,15 +75,21 @@ export function nightsBetween(checkIn: string, checkOut?: string | null): number
   return Math.max(1, diff);
 }
 
-/** Fixed package price for «Встреча выпускников» (₸ per person). */
+/** Default package price for «Встреча выпускников» (₸ per person). */
 export const ALUMNI_PRICE_PER_PERSON = 25_000;
 
 export const ALUMNI_PACKAGE_INCLUDES =
   "Проживание в гостинице, банкет, бассейн, баня с сауной, комплексное трёхразовое питание";
 
-export function alumniPackageAmount(peopleCount: number): string {
+export function alumniPackageAmount(
+  peopleCount: number,
+  pricePerPerson: number = ALUMNI_PRICE_PER_PERSON,
+): string {
   const people = Math.max(1, Math.floor(peopleCount) || 1);
-  return String(people * ALUMNI_PRICE_PER_PERSON);
+  const rate = Number.isFinite(pricePerPerson) && pricePerPerson >= 0
+    ? pricePerPerson
+    : ALUMNI_PRICE_PER_PERSON;
+  return String(people * rate);
 }
 
 export function stayAmountFromRate(

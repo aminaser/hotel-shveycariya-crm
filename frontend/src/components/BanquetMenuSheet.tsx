@@ -6,10 +6,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useRestaurantMenu } from "@/hooks/useRestaurantMenu";
+import { useTakeawayMenu } from "@/hooks/useTakeawayMenu";
 import {
+  BANQUET_SERVICE_CHARGE_PERCENT,
   dishDisplayName,
   dishLineTotal,
-  dishesTotal,
+  dishesTotalWithService,
   parseDishes,
   serializeDishes,
   type OrderedDish,
@@ -23,11 +25,15 @@ import {
 } from "@/lib/restaurant-menu";
 import { cn } from "@/lib/utils";
 
+export type OrderMenuKind = "banquet" | "takeaway";
+
 interface BanquetMenuSheetProps {
   open: boolean;
   value: string;
   onClose: () => void;
   onSave: (serialized: string) => void;
+  /** Banquet uses restaurant menu + 10% service; takeaway uses takeaway menu, no service. */
+  kind?: OrderMenuKind;
 }
 
 function QtyInput({
@@ -90,8 +96,20 @@ function QtyInput({
   );
 }
 
-export function BanquetMenuSheet({ open, value, onClose, onSave }: BanquetMenuSheetProps) {
-  const { menu, isLoading } = useRestaurantMenu(open);
+export function BanquetMenuSheet({
+  open,
+  value,
+  onClose,
+  onSave,
+  kind = "banquet",
+}: BanquetMenuSheetProps) {
+  const isTakeaway = kind === "takeaway";
+  const restaurant = useRestaurantMenu(open && !isTakeaway);
+  const takeaway = useTakeawayMenu(open && isTakeaway);
+  const menu = isTakeaway ? takeaway.menu : restaurant.menu;
+  const isLoading = isTakeaway ? takeaway.isLoading : restaurant.isLoading;
+  const applyService = !isTakeaway;
+
   const [tabId, setTabId] = useState(menu[0]?.id ?? "custom");
   const [subId, setSubId] = useState(menu[0]?.subcategories[0]?.id ?? "");
   const [query, setQuery] = useState("");
@@ -151,7 +169,8 @@ export function BanquetMenuSheet({ open, value, onClose, onSave }: BanquetMenuSh
     return [...groups.entries()];
   }, [visibleItems, query, activeSub?.title]);
 
-  const total = dishesTotal(order);
+  const { subtotal, service, total } = dishesTotalWithService(order);
+  const displayTotal = applyService ? total : subtotal;
   const orderCount = order.reduce((sum, item) => sum + item.quantity, 0);
 
   const getDraftQty = (key: string) => draftQty[key] ?? 1;
@@ -211,9 +230,13 @@ export function BanquetMenuSheet({ open, value, onClose, onSave }: BanquetMenuSh
                 <UtensilsCrossed className="h-4 w-4" />
               </span>
               <div>
-                <h2 className="text-lg font-semibold tracking-tight">Меню ресторана</h2>
+                <h2 className="text-lg font-semibold tracking-tight">
+                  {isTakeaway ? "Меню на вынос" : "Меню ресторана"}
+                </h2>
                 <p className="text-xs text-muted-foreground">
-                  Выберите блюда и укажите количество для банкета
+                  {isTakeaway
+                    ? "Выберите блюда для заказа на вынос (без обслуживания)"
+                    : `Выберите блюда для банкета (+${BANQUET_SERVICE_CHARGE_PERCENT}% обслуживание)`}
                 </p>
               </div>
             </div>
@@ -463,11 +486,25 @@ export function BanquetMenuSheet({ open, value, onClose, onSave }: BanquetMenuSh
             </div>
 
             <div className="border-t border-border bg-background px-4 py-3">
-              <div className="mb-3 flex items-end justify-between gap-2">
-                <span className="text-sm text-muted-foreground">Итого</span>
-                <span className="text-xl font-bold tabular-nums tracking-tight text-emerald-700">
-                  {formatMoney(total)}
-                </span>
+              <div className="mb-3 space-y-1">
+                {applyService && service > 0 ? (
+                  <>
+                    <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                      <span>Блюда</span>
+                      <span className="tabular-nums">{formatMoney(subtotal)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                      <span>Обслуживание {BANQUET_SERVICE_CHARGE_PERCENT}%</span>
+                      <span className="tabular-nums">{formatMoney(service)}</span>
+                    </div>
+                  </>
+                ) : null}
+                <div className="flex items-end justify-between gap-2">
+                  <span className="text-sm text-muted-foreground">Итого</span>
+                  <span className="text-xl font-bold tabular-nums tracking-tight text-emerald-700">
+                    {formatMoney(displayTotal)}
+                  </span>
+                </div>
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" className="flex-1" onClick={onClose}>

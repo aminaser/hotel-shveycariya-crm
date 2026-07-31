@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
+from app.core.permissions import require_analytics_owner
 from app.models.employee import Employee
 from app.models.timesheet_shift import TimesheetShift
 from app.models.user import User
@@ -15,10 +16,12 @@ from app.schemas.timesheet import (
     EmployeeCreate,
     EmployeeResponse,
     EmployeeUpdate,
+    EmployeeWeekStat,
     ShiftCreate,
     ShiftResponse,
     ShiftUpdate,
     TimesheetDaySummary,
+    TimesheetWeekSummary,
 )
 from app.services.timesheet_calc import shift_earnings, shift_hours
 from app.services.room_service import today_local
@@ -62,7 +65,7 @@ def list_employees(
 def create_employee(
     payload: EmployeeCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_analytics_owner),
 ) -> Employee:
     employee = Employee(**payload.model_dump())
     db.add(employee)
@@ -76,7 +79,7 @@ def update_employee(
     employee_id: int,
     payload: EmployeeUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_analytics_owner),
 ) -> Employee:
     employee = _active_employees(db).filter(Employee.id == employee_id).first()
     if not employee:
@@ -92,7 +95,7 @@ def update_employee(
 def delete_employee(
     employee_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_analytics_owner),
 ) -> Response:
     employee = _active_employees(db).filter(Employee.id == employee_id).first()
     if not employee:
@@ -100,7 +103,6 @@ def delete_employee(
     employee.deleted_at = datetime.now(timezone.utc)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
 
 @router.get("/timesheet", response_model=TimesheetDaySummary)
 def get_timesheet_day(
@@ -123,6 +125,68 @@ def get_timesheet_day(
         total_hours=total_hours,
         total_salary=total_salary,
         shifts=responses,
+    )
+
+
+@router.get("/timesheet/week", response_model=TimesheetWeekSummary)
+def get_timesheet_week(
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> TimesheetWeekSummary:
+    if date_to < date_from:
+        raise HTTPException(status_code=400, detail="date_to не может быть раньше date_from")
+    if (date_to - date_from).days > 45:
+        raise HTTPException(status_code=400, detail="Период не больше 45 дней")
+
+    shifts = (
+        db.query(TimesheetShift)
+        .join(Employee)
+        .filter(
+            TimesheetShift.work_date >= date_from,
+            TimesheetShift.work_date <= date_to,
+            Employee.deleted_at.is_(None),
+        )
+        .order_by(
+            TimesheetShift.work_date.asc(),
+            TimesheetShift.start_time.asc(),
+            Employee.full_name.asc(),
+        )
+        .all()
+    )
+    responses = [_shift_response(shift) for shift in shifts]
+    total_hours = sum((item.hours_worked for item in responses), Decimal("0"))
+    total_salary = sum((item.earnings for item in responses), Decimal("0"))
+
+    by_emp: dict[int, EmployeeWeekStat] = {}
+    for item in responses:
+        row = by_emp.get(item.employee_id)
+        if row is None:
+            by_emp[item.employee_id] = EmployeeWeekStat(
+                employee_id=item.employee_id,
+                employee_name=item.employee_name,
+                position=item.position,
+                shifts_count=1,
+                total_hours=item.hours_worked,
+                total_salary=item.earnings,
+            )
+        else:
+            row.shifts_count += 1
+            row.total_hours += item.hours_worked
+            row.total_salary += item.earnings
+
+    by_employee = sorted(
+        by_emp.values(),
+        key=lambda row: (-row.total_salary, row.employee_name),
+    )
+    return TimesheetWeekSummary(
+        date_from=date_from,
+        date_to=date_to,
+        total_hours=total_hours,
+        total_salary=total_salary,
+        shifts=responses,
+        by_employee=by_employee,
     )
 
 

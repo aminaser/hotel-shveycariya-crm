@@ -1,14 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { PartyPopper, Pencil, Plus, Trash2, UtensilsCrossed } from "lucide-react";
+import { Pencil, Plus, ShoppingBag, Trash2, UtensilsCrossed } from "lucide-react";
 import { toast } from "sonner";
 
 import { apiFetch, ApiError } from "@/api/client";
-import type { Banquet } from "@/api/types";
+import type { TakeawayOrder } from "@/api/types";
 import { AuthorFilter } from "@/components/AuthorFilter";
 import { AuthorshipMeta } from "@/components/AuthorshipMeta";
 import { BanquetMenuSheet } from "@/components/BanquetMenuSheet";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,112 +18,93 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  BANQUET_SERVICE_CHARGE_PERCENT,
-  dishesTotalWithService,
-  formatDishesPreview,
-  parseDishes,
-} from "@/lib/banquet-dishes";
+import { dishesTotal, formatDishesPreview, parseDishes } from "@/lib/banquet-dishes";
 import { formatDate, formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-interface BanquetForm {
-  event_date: string;
-  event_time: string;
+interface TakeawayForm {
+  order_date: string;
+  order_time: string;
   guest_name: string;
   phone: string;
-  venue: string;
-  people_count: string;
-  event_type: string;
   prepayment: string;
   dishes: string;
 }
 
-function emptyForm(): BanquetForm {
+function emptyForm(): TakeawayForm {
   return {
-    event_date: new Date().toISOString().slice(0, 10),
-    event_time: "",
+    order_date: new Date().toISOString().slice(0, 10),
+    order_time: "",
     guest_name: "",
     phone: "",
-    venue: "",
-    people_count: "10",
-    event_type: "",
     prepayment: "",
     dishes: "",
   };
 }
 
-function toForm(b: Banquet): BanquetForm {
+function toForm(o: TakeawayOrder): TakeawayForm {
   return {
-    event_date: b.event_date,
-    event_time: b.event_time ?? "",
-    guest_name: b.guest_name,
-    phone: b.phone ?? "",
-    venue: b.venue ?? "",
-    people_count: String(b.people_count),
-    event_type: b.event_type ?? "",
-    prepayment: b.prepayment && parseFloat(b.prepayment) > 0 ? b.prepayment : "",
-    dishes: b.dishes ?? "",
+    order_date: o.order_date,
+    order_time: o.order_time ?? "",
+    guest_name: o.guest_name,
+    phone: o.phone ?? "",
+    prepayment: o.prepayment && parseFloat(o.prepayment) > 0 ? o.prepayment : "",
+    dishes: o.dishes ?? "",
   };
 }
 
-export function BanquetsPage() {
+export function TakeawayOrdersPage() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [editBanquet, setEditBanquet] = useState<Banquet | null>(null);
-  const [form, setForm] = useState<BanquetForm>(emptyForm());
+  const [editOrder, setEditOrder] = useState<TakeawayOrder | null>(null);
+  const [form, setForm] = useState<TakeawayForm>(emptyForm());
   const [authorId, setAuthorId] = useState<number | null>(null);
 
-  const dishesPreview = formatDishesPreview(form.dishes || null, { serviceCharge: true });
-  const parsedDishes = parseDishes(form.dishes);
-  const { subtotal: dishesSum, service: serviceSum, total: grandTotal } =
-    dishesTotalWithService(parsedDishes.items);
+  const dishesPreview = formatDishesPreview(form.dishes || null);
+  const dishesSum = dishesTotal(parseDishes(form.dishes).items);
 
-  const { data: banquets = [], isLoading } = useQuery({
-    queryKey: ["banquets", authorId],
+  const { data: orders = [], isLoading } = useQuery({
+    queryKey: ["takeaway-orders", authorId],
     queryFn: () => {
       const qs = authorId != null ? `?author_id=${authorId}` : "";
-      return apiFetch<Banquet[]>(`/banquets${qs}`);
+      return apiFetch<TakeawayOrder[]>(`/takeaway-orders${qs}`);
     },
   });
 
-  const set = (field: keyof BanquetForm) => (value: string) =>
+  const set = (field: keyof TakeawayForm) => (value: string) =>
     setForm((p) => ({ ...p, [field]: value }));
 
   const openCreate = () => {
-    setEditBanquet(null);
+    setEditOrder(null);
     setForm(emptyForm());
     setMenuOpen(false);
     setDialogOpen(true);
   };
 
-  const openEdit = (b: Banquet) => {
-    setEditBanquet(b);
-    setForm(toForm(b));
+  const openEdit = (o: TakeawayOrder) => {
+    setEditOrder(o);
+    setForm(toForm(o));
     setMenuOpen(false);
     setDialogOpen(true);
   };
 
   const buildPayload = () => ({
-    event_date: form.event_date,
-    event_time: form.event_time.trim() || null,
+    order_date: form.order_date,
+    order_time: form.order_time.trim() || null,
     guest_name: form.guest_name.trim(),
     phone: form.phone.trim() || null,
-    venue: form.venue.trim() || null,
-    people_count: Math.max(1, parseInt(form.people_count, 10) || 1),
-    event_type: form.event_type.trim() || null,
     prepayment: form.prepayment.trim() || "0",
     dishes: form.dishes.trim() || null,
   });
 
   const validate = (): boolean => {
     if (!form.guest_name.trim()) {
-      toast.error("Укажите ФИО");
+      toast.error("Укажите ФИО / имя");
       return false;
     }
-    if (!form.event_date) {
-      toast.error("Укажите дату проведения");
+    if (!form.order_date) {
+      toast.error("Укажите дату заказа");
       return false;
     }
     return true;
@@ -139,30 +119,30 @@ export function BanquetsPage() {
   const saveMutation = useMutation({
     mutationFn: () => {
       if (!validate()) throw new Error("validation");
-      return editBanquet
-        ? apiFetch(`/banquets/${editBanquet.id}`, {
+      return editOrder
+        ? apiFetch(`/takeaway-orders/${editOrder.id}`, {
             method: "PATCH",
             body: JSON.stringify(buildPayload()),
           })
-        : apiFetch("/banquets", {
+        : apiFetch("/takeaway-orders", {
             method: "POST",
             body: JSON.stringify(buildPayload()),
           });
     },
     onSuccess: () => {
-      toast.success(editBanquet ? "Бронирование обновлено" : "Бронирование добавлено");
+      toast.success(editOrder ? "Заказ обновлён" : "Заказ добавлен");
       setDialogOpen(false);
-      setEditBanquet(null);
-      queryClient.invalidateQueries({ queryKey: ["banquets"] });
+      setEditOrder(null);
+      queryClient.invalidateQueries({ queryKey: ["takeaway-orders"] });
     },
     onError: (e) => onError(e, "Не удалось сохранить"),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: number) => apiFetch(`/banquets/${id}`, { method: "DELETE" }),
+    mutationFn: (id: number) => apiFetch(`/takeaway-orders/${id}`, { method: "DELETE" }),
     onSuccess: () => {
-      toast.success("Бронирование перемещено в корзину");
-      queryClient.invalidateQueries({ queryKey: ["banquets"] });
+      toast.success("Заказ перемещён в корзину");
+      queryClient.invalidateQueries({ queryKey: ["takeaway-orders"] });
       queryClient.invalidateQueries({ queryKey: ["crm-trash"] });
     },
     onError: (e) => onError(e, "Не удалось удалить"),
@@ -172,80 +152,72 @@ export function BanquetsPage() {
     <div className="p-6">
       <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">Банкеты</h1>
+          <h1 className="text-2xl font-bold">На вынос</h1>
           <p className="text-sm text-muted-foreground">
-            Журнал бронирования банкетов и мероприятий
+            Заказы на вынос из отдельного меню · без обслуживания
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <AuthorFilter value={authorId} onChange={setAuthorId} />
           <Button onClick={openCreate}>
             <Plus className="h-4 w-4" />
-            Добавить бронирование
+            Добавить заказ
           </Button>
         </div>
       </div>
 
       {isLoading ? (
         <p className="text-muted-foreground">Загрузка...</p>
-      ) : banquets.length === 0 ? (
+      ) : orders.length === 0 ? (
         <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border py-16 text-muted-foreground">
-          <PartyPopper className="h-8 w-8" />
-          <p>Пока нет бронирований — добавьте первое</p>
+          <ShoppingBag className="h-8 w-8" />
+          <p>Пока нет заказов — добавьте первый</p>
         </div>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-border bg-card">
-          <table className="w-full min-w-[1100px] border-collapse text-sm">
+          <table className="w-full min-w-[900px] border-collapse text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/60 text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <th className="px-4 py-3">Дата</th>
                 <th className="px-4 py-3">Время</th>
-                <th className="px-4 py-3">ФИО</th>
+                <th className="px-4 py-3">Клиент</th>
                 <th className="px-4 py-3">Телефон</th>
-                <th className="px-4 py-3">Место</th>
-                <th className="px-4 py-3">Чел.</th>
-                <th className="px-4 py-3">Мероприятие</th>
                 <th className="px-4 py-3">Предоплата</th>
                 <th className="px-4 py-3">Блюда</th>
                 <th className="w-24 px-4 py-3"></th>
               </tr>
             </thead>
             <tbody>
-              {banquets.map((b) => (
-                <tr key={b.id} className="border-b border-border align-top last:border-b-0">
-                  <td className="px-4 py-3 font-medium">{formatDate(b.event_date)}</td>
-                  <td className="px-4 py-3">{b.event_time ?? "—"}</td>
+              {orders.map((o) => (
+                <tr key={o.id} className="border-b border-border align-top last:border-b-0">
+                  <td className="px-4 py-3 font-medium">{formatDate(o.order_date)}</td>
+                  <td className="px-4 py-3">{o.order_time ?? "—"}</td>
                   <td className="px-4 py-3 font-medium">
-                    {b.guest_name}
+                    {o.guest_name}
                     <AuthorshipMeta
                       className="mt-1 font-normal"
-                      createdByName={b.created_by_name}
-                      createdAt={b.created_at}
-                      updatedByName={b.updated_by_name}
-                      updatedAt={b.updated_at}
+                      createdByName={o.created_by_name}
+                      createdAt={o.created_at}
+                      updatedByName={o.updated_by_name}
+                      updatedAt={o.updated_at}
                     />
                   </td>
-                  <td className="px-4 py-3">{b.phone ?? "—"}</td>
-                  <td className="px-4 py-3">{b.venue ?? "—"}</td>
-                  <td className="px-4 py-3">{b.people_count}</td>
+                  <td className="px-4 py-3">{o.phone ?? "—"}</td>
                   <td className="px-4 py-3">
-                    {b.event_type ? <Badge variant="muted">{b.event_type}</Badge> : "—"}
-                  </td>
-                  <td className="px-4 py-3">
-                    {parseFloat(b.prepayment) > 0 ? (
+                    {parseFloat(o.prepayment) > 0 ? (
                       <span className="font-medium text-emerald-700">
-                        {formatMoney(b.prepayment)}
+                        {formatMoney(o.prepayment)}
                       </span>
                     ) : (
                       <span className="text-muted-foreground">нет</span>
                     )}
                   </td>
                   <td className="max-w-[280px] whitespace-pre-line px-4 py-3 text-xs text-muted-foreground">
-                    {formatDishesPreview(b.dishes, { serviceCharge: true })}
+                    {formatDishesPreview(o.dishes)}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1">
-                      <Button variant="ghost" size="icon" onClick={() => openEdit(b)}>
+                      <Button variant="ghost" size="icon" onClick={() => openEdit(o)}>
                         <Pencil className="h-4 w-4" />
                       </Button>
                       <Button
@@ -253,8 +225,8 @@ export function BanquetsPage() {
                         size="icon"
                         className="text-red-600 hover:text-red-700"
                         onClick={() => {
-                          if (confirm(`Удалить бронирование «${b.guest_name}»?`)) {
-                            deleteMutation.mutate(b.id);
+                          if (confirm(`Удалить заказ «${o.guest_name}»?`)) {
+                            deleteMutation.mutate(o.id);
                           }
                         }}
                       >
@@ -279,7 +251,6 @@ export function BanquetsPage() {
       >
         <DialogContent
           className="max-h-[90vh] max-w-lg overflow-y-auto"
-          // Keep true so Radix does not freeze focus/pointer outside; we only block dismiss while menu is open.
           closeOnOutsideClick
           onPointerDownOutside={(event) => {
             if (menuOpen) event.preventDefault();
@@ -296,30 +267,30 @@ export function BanquetsPage() {
         >
           <DialogHeader>
             <DialogTitle>
-              {editBanquet ? "Редактировать бронирование" : "Новое бронирование банкета"}
+              {editOrder ? "Редактировать заказ" : "Новый заказ на вынос"}
             </DialogTitle>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label>Дата проведения</Label>
+                <Label>Дата</Label>
                 <Input
                   type="date"
-                  value={form.event_date}
-                  onChange={(e) => set("event_date")(e.target.value)}
+                  value={form.order_date}
+                  onChange={(e) => set("order_date")(e.target.value)}
                 />
               </div>
               <div className="space-y-2">
-                <Label>Время проведения</Label>
+                <Label>Время</Label>
                 <Input
                   type="time"
-                  value={form.event_time}
-                  onChange={(e) => set("event_time")(e.target.value)}
+                  value={form.order_time}
+                  onChange={(e) => set("order_time")(e.target.value)}
                 />
               </div>
             </div>
             <div className="space-y-2">
-              <Label>ФИО</Label>
+              <Label>ФИО / имя</Label>
               <Input
                 value={form.guest_name}
                 onChange={(e) => set("guest_name")(e.target.value)}
@@ -336,33 +307,6 @@ export function BanquetsPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Кол-во человек</Label>
-                <Input
-                  type="number"
-                  min={1}
-                  value={form.people_count}
-                  onChange={(e) => set("people_count")(e.target.value)}
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Место проведения</Label>
-              <Input
-                value={form.venue}
-                onChange={(e) => set("venue")(e.target.value)}
-                placeholder="Банкетный зал / летняя терраса…"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label>Тип мероприятия</Label>
-                <Input
-                  value={form.event_type}
-                  onChange={(e) => set("event_type")(e.target.value)}
-                  placeholder="Свадьба, юбилей, корпоратив…"
-                />
-              </div>
-              <div className="space-y-2">
                 <Label>Предоплата, ₸</Label>
                 <Input
                   type="number"
@@ -374,7 +318,7 @@ export function BanquetsPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Список заказных блюд</Label>
+              <Label>Блюда из меню на вынос</Label>
               <button
                 type="button"
                 onClick={() => setMenuOpen(true)}
@@ -386,11 +330,11 @@ export function BanquetsPage() {
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700">
                     <UtensilsCrossed className="h-3.5 w-3.5" />
-                    Открыть меню
+                    Открыть меню на вынос
                   </span>
-                  {grandTotal > 0 && (
+                  {dishesSum > 0 && (
                     <span className="text-sm font-semibold tabular-nums text-emerald-700">
-                      {formatMoney(grandTotal)}
+                      {formatMoney(dishesSum)}
                     </span>
                   )}
                 </div>
@@ -400,26 +344,13 @@ export function BanquetsPage() {
                   </pre>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    Нажмите, чтобы выбрать блюда из меню ресторана…
+                    Нажмите, чтобы выбрать блюда…
                   </p>
                 )}
               </button>
-              {grandTotal > 0 && (
-                <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                  <div className="flex justify-between gap-2">
-                    <span>Блюда</span>
-                    <span className="tabular-nums">{formatMoney(dishesSum)}</span>
-                  </div>
-                  <div className="mt-1 flex justify-between gap-2">
-                    <span>Обслуживание {BANQUET_SERVICE_CHARGE_PERCENT}%</span>
-                    <span className="tabular-nums">{formatMoney(serviceSum)}</span>
-                  </div>
-                  <div className="mt-1 flex justify-between gap-2 font-semibold text-foreground">
-                    <span>Итого с обслуживанием</span>
-                    <span className="tabular-nums text-emerald-700">{formatMoney(grandTotal)}</span>
-                  </div>
-                </div>
-              )}
+              <p className="text-xs text-muted-foreground">
+                Обслуживание не начисляется.
+              </p>
             </div>
           </div>
           <DialogFooter>
@@ -435,6 +366,7 @@ export function BanquetsPage() {
 
       <BanquetMenuSheet
         open={menuOpen}
+        kind="takeaway"
         value={form.dishes}
         onClose={() => setMenuOpen(false)}
         onSave={(serialized) => set("dishes")(serialized)}

@@ -15,6 +15,11 @@ export function canManageMenu(user: { username?: string | null } | null | undefi
   return canViewAnalytics(user);
 }
 
+/** Room / spa base prices — only Жибек. */
+export function canManagePrices(user: { username?: string | null } | null | undefined): boolean {
+  return canViewAnalytics(user);
+}
+
 export interface AuthUser {
   id: number;
   username: string;
@@ -39,6 +44,7 @@ interface AuthState {
   isOwner: () => boolean;
   canViewAnalytics: () => boolean;
   canManageMenu: () => boolean;
+  canManagePrices: () => boolean;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -65,6 +71,7 @@ export const useAuthStore = create<AuthState>()(
       isOwner: () => get().user?.role === "owner",
       canViewAnalytics: () => canViewAnalytics(get().user),
       canManageMenu: () => canManageMenu(get().user),
+      canManagePrices: () => canManagePrices(get().user),
     }),
     {
       name: "hotel-crm-auth",

@@ -27,6 +27,7 @@ ROOM_POLICY_NOTE = "Завтрак включен. Выезд до 12:00, зае
 
 
 def seed_room_rates(db: Session) -> None:
+    """Fill missing room prices/types. Does not overwrite prices already set by staff."""
     rooms = db.query(Room).all()
     if not rooms:
         return
@@ -37,10 +38,10 @@ def seed_room_rates(db: Session) -> None:
         if not rate:
             continue
         price, room_type = rate
-        if room.price_per_night != price:
+        if room.price_per_night is None:
             room.price_per_night = price
             changed = True
-        if room.room_type != room_type:
+        if not room.room_type:
             room.room_type = room_type
             changed = True
         if not room.notes or ROOM_POLICY_NOTE not in room.notes:

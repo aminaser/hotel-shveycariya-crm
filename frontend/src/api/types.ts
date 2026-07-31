@@ -114,6 +114,23 @@ export interface Banquet {
   updated_by_name: string | null;
 }
 
+export interface TakeawayOrder {
+  id: number;
+  order_date: string;
+  order_time: string | null;
+  guest_name: string;
+  phone: string | null;
+  prepayment: string;
+  dishes: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by_user_id: number | null;
+  created_by_name: string | null;
+  updated_by_user_id: number | null;
+  updated_by_name: string | null;
+}
+
 export interface RegistrySummary {
   today_checkins: number;
   today_payments_kzt: string;
@@ -297,4 +314,22 @@ export interface TimesheetDaySummary {
   total_hours: string;
   total_salary: string;
   shifts: TimesheetShift[];
+}
+
+export interface EmployeeWeekStat {
+  employee_id: number;
+  employee_name: string;
+  position: string;
+  shifts_count: number;
+  total_hours: string;
+  total_salary: string;
+}
+
+export interface TimesheetWeekSummary {
+  date_from: string;
+  date_to: string;
+  total_hours: string;
+  total_salary: string;
+  shifts: TimesheetShift[];
+  by_employee: EmployeeWeekStat[];
 }

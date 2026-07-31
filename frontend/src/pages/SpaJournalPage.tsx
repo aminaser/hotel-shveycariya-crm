@@ -3,7 +3,7 @@ import { Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import { apiFetch } from "@/api/client";
+import { apiFetch, ApiError } from "@/api/client";
 import type { Stay } from "@/api/types";
 import { AuthorFilter } from "@/components/AuthorFilter";
 import { AuthorshipMeta } from "@/components/AuthorshipMeta";
@@ -27,7 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { logClientActivity } from "@/lib/activity";
-import { useAuthStore, type AuthUser } from "@/stores/auth";
+import { canManagePrices, useAuthStore, type AuthUser } from "@/stores/auth";
 import {
   type SpaBooking,
   type SpaBookingCreate,
@@ -36,6 +36,13 @@ import {
   isSupabaseConfigured,
   supabase,
 } from "@/lib/supabase";
+
+interface SpaPrices {
+  sauna: number;
+  banya: number;
+}
+
+const DEFAULT_SPA_PRICES: SpaPrices = { sauna: 5000, banya: 5000 };
 
 const SLOTS = ["14:00", "15:30", "16:00", "17:30", "18:00", "19:00", "20:00"];
 
@@ -92,7 +99,11 @@ function monthBehind(): string {
   return daysOffset(-30);
 }
 
-function emptyForm(): SpaBookingCreate & { guest_phone: string; room: string; notes: string } {
+function emptyForm(prices: SpaPrices = DEFAULT_SPA_PRICES): SpaBookingCreate & {
+  guest_phone: string;
+  room: string;
+  notes: string;
+} {
   return {
     booking_date: todayLocal(),
     slot_time: "16:00",
@@ -105,7 +116,7 @@ function emptyForm(): SpaBookingCreate & { guest_phone: string; room: string; no
     status: "confirmed",
     source: "walk_in",
     notes: "",
-    price: 5000,
+    price: prices.sauna,
   };
 }
 
@@ -207,6 +218,8 @@ function stayGuestLabel(stay: Stay): string {
 
 export function SpaJournalPage() {
   const queryClient = useQueryClient();
+  const user = useAuthStore((s) => s.user);
+  const canEditPrices = canManagePrices(user);
   const authorName = useAuthStore((s) => s.user?.full_name ?? s.username ?? "Пользователь");
   const [dateFrom, setDateFrom] = useState(monthBehind);
   const [dateTo, setDateTo] = useState(weekAhead);
@@ -214,9 +227,25 @@ export function SpaJournalPage() {
   const [statusFilter, setStatusFilter] = useState<"all" | SpaBookingStatus>("all");
   const [authorId, setAuthorId] = useState<number | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [form, setForm] = useState(emptyForm);
+  const [pricesOpen, setPricesOpen] = useState(false);
+  const [priceDraft, setPriceDraft] = useState({ sauna: "5000", banya: "5000" });
+  const [form, setForm] = useState(() => emptyForm());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedStayId, setSelectedStayId] = useState<string>("");
+
+  const { data: spaPrices = DEFAULT_SPA_PRICES } = useQuery({
+    queryKey: ["spa-prices"],
+    queryFn: () => apiFetch<SpaPrices>("/spa-prices"),
+    staleTime: 30_000,
+  });
+
+  useEffect(() => {
+    if (!pricesOpen) return;
+    setPriceDraft({
+      sauna: String(Math.round(spaPrices.sauna)),
+      banya: String(Math.round(spaPrices.banya)),
+    });
+  }, [pricesOpen, spaPrices]);
 
   const { data: users = [] } = useQuery({
     queryKey: ["users"],
@@ -301,7 +330,7 @@ export function SpaJournalPage() {
       });
       setDialogOpen(false);
       setEditingId(null);
-      setForm(emptyForm());
+      setForm(emptyForm(spaPrices));
       // Widen the date filter so the freshly saved booking is visible
       // even if it is outside the current range.
       if (payload.booking_date < dateFrom) setDateFrom(payload.booking_date);
@@ -309,6 +338,26 @@ export function SpaJournalPage() {
       invalidateBookings();
     },
     onError: (err: Error) => toast.error(err.message),
+  });
+
+  const saveSpaPrices = useMutation({
+    mutationFn: () =>
+      apiFetch<SpaPrices>("/spa-prices", {
+        method: "PUT",
+        body: JSON.stringify({
+          sauna: Math.max(0, Number(priceDraft.sauna) || 0),
+          banya: Math.max(0, Number(priceDraft.banya) || 0),
+        }),
+      }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["spa-prices"], data);
+      toast.success("Цены сауны/бани сохранены");
+      setPricesOpen(false);
+    },
+    onError: (e) => {
+      if (e instanceof ApiError) toast.error(e.message);
+      else toast.error("Не удалось сохранить цены");
+    },
   });
 
   const deleteMutation = useMutation({
@@ -369,7 +418,7 @@ export function SpaJournalPage() {
       status: form.status ?? "confirmed",
       source: form.is_hotel_guest ? "crm" : "walk_in",
       notes: form.notes.trim() || null,
-      price: Number(form.price) || 5000,
+      price: Number(form.price) || spaPrices[form.service] || 0,
     });
   };
 
@@ -388,7 +437,7 @@ export function SpaJournalPage() {
       status: booking.status,
       source: booking.source,
       notes: booking.notes ?? "",
-      price: booking.price ?? 5000,
+      price: booking.price ?? spaPrices[booking.service] ?? 0,
     });
     setDialogOpen(true);
   };
@@ -424,17 +473,23 @@ export function SpaJournalPage() {
             Записи из AI-консьержа и ручные брони гостей отеля и внешних посетителей
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
             <RefreshCw className={`mr-2 h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
             Обновить
           </Button>
+          {canEditPrices && (
+            <Button variant="outline" size="sm" onClick={() => setPricesOpen(true)}>
+              <Pencil className="mr-2 h-4 w-4" />
+              Цены сауны / бани
+            </Button>
+          )}
           <Button
             size="sm"
             onClick={() => {
               setEditingId(null);
               setSelectedStayId("");
-              setForm(emptyForm());
+              setForm(emptyForm(spaPrices));
               setDialogOpen(true);
             }}
           >
@@ -659,7 +714,14 @@ export function SpaJournalPage() {
                 <Label>Услуга</Label>
                 <Select
                   value={form.service}
-                  onValueChange={(v) => setForm((prev) => ({ ...prev, service: v as SpaService }))}
+                  onValueChange={(v) => {
+                    const service = v as SpaService;
+                    setForm((prev) => ({
+                      ...prev,
+                      service,
+                      price: spaPrices[service],
+                    }));
+                  }}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -772,7 +834,7 @@ export function SpaJournalPage() {
                   <Label>Цена, ₸</Label>
                   <Input
                     type="number"
-                    value={form.price ?? 5000}
+                    value={form.price ?? spaPrices[form.service]}
                     onChange={(e) =>
                       setForm((prev) => ({ ...prev, price: Number(e.target.value) || 0 }))
                     }
@@ -780,6 +842,18 @@ export function SpaJournalPage() {
                 </div>
               )}
             </div>
+            {form.is_hotel_guest && (
+              <div className="space-y-2">
+                <Label>Цена, ₸</Label>
+                <Input
+                  type="number"
+                  value={form.price ?? spaPrices[form.service]}
+                  onChange={(e) =>
+                    setForm((prev) => ({ ...prev, price: Number(e.target.value) || 0 }))
+                  }
+                />
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label>Заметки</Label>
@@ -796,6 +870,45 @@ export function SpaJournalPage() {
             </Button>
             <Button onClick={submitForm} disabled={saveMutation.isPending}>
               {saveMutation.isPending ? "Сохранение…" : "Сохранить"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={pricesOpen} onOpenChange={setPricesOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Цены сауны / бани</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Базовые цены для новых записей. Только для Жибек.
+          </p>
+          <div className="grid gap-4 py-2">
+            <div className="space-y-2">
+              <Label>Финская сауна, ₸</Label>
+              <Input
+                type="number"
+                min={0}
+                value={priceDraft.sauna}
+                onChange={(e) => setPriceDraft((prev) => ({ ...prev, sauna: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Русская баня, ₸</Label>
+              <Input
+                type="number"
+                min={0}
+                value={priceDraft.banya}
+                onChange={(e) => setPriceDraft((prev) => ({ ...prev, banya: e.target.value }))}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPricesOpen(false)}>
+              Отмена
+            </Button>
+            <Button onClick={() => saveSpaPrices.mutate()} disabled={saveSpaPrices.isPending}>
+              {saveSpaPrices.isPending ? "Сохранение…" : "Сохранить"}
             </Button>
           </DialogFooter>
         </DialogContent>

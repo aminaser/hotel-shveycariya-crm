@@ -34,6 +34,7 @@ from app.services.room_service import (
     now_local,
     validate_stay_for_room,
     CHECK_IN_HOUR,
+    CHECK_OUT_HOUR,
 )
 
 router = APIRouter(prefix="/stays", tags=["stays"])
@@ -266,7 +267,8 @@ def list_stays(
             )
         )
     elif filter == "active":
-        # Actually in the room now — exclude future check-ins (бронь).
+        # Actually in the room now — exclude future check-ins (бронь) and
+        # guests past planned checkout 12:00 (номер уже свободен).
         check_in_expr = func.coalesce(Stay.check_in, Stay.record_date)
         hour = now_local().hour
         if hour >= CHECK_IN_HOUR:
@@ -277,6 +279,13 @@ def list_stays(
             Stay.check_out.is_(None),
             or_(Stay.stay_type == StayType.extension, in_room_today),
         )
+        if hour >= CHECK_OUT_HOUR:
+            query = query.filter(
+                or_(
+                    Stay.planned_check_out.is_(None),
+                    Stay.planned_check_out != today,
+                )
+            )
 
     if payment_method == "other":
         query = query.filter(

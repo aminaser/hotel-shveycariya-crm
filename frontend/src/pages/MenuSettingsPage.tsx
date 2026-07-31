@@ -12,13 +12,28 @@ import {
   useRestaurantMenu,
   type RestaurantMenuResponse,
 } from "@/hooks/useRestaurantMenu";
+import {
+  defaultTakeawayMenu,
+  useTakeawayMenu,
+} from "@/hooks/useTakeawayMenu";
 import { formatMoney } from "@/lib/format";
-import { restaurantMenu as defaultMenu, type MenuItem, type MenuTab } from "@/lib/restaurant-menu";
+import { restaurantMenu as defaultRestaurantMenu, type MenuItem, type MenuTab } from "@/lib/restaurant-menu";
 import { cn } from "@/lib/utils";
+
+type MenuKind = "restaurant" | "takeaway";
 
 export function MenuSettingsPage() {
   const queryClient = useQueryClient();
-  const { menu, isCustom, isLoading } = useRestaurantMenu();
+  const [kind, setKind] = useState<MenuKind>("restaurant");
+  const restaurant = useRestaurantMenu(kind === "restaurant");
+  const takeaway = useTakeawayMenu(kind === "takeaway");
+  const menu = kind === "takeaway" ? takeaway.menu : restaurant.menu;
+  const isCustom = kind === "takeaway" ? takeaway.isCustom : restaurant.isCustom;
+  const isLoading = kind === "takeaway" ? takeaway.isLoading : restaurant.isLoading;
+  const defaultMenu = kind === "takeaway" ? defaultTakeawayMenu : defaultRestaurantMenu;
+  const apiPath = kind === "takeaway" ? "/takeaway-menu" : "/restaurant-menu";
+  const queryKey = kind === "takeaway" ? "takeaway-menu" : "restaurant-menu";
+
   const [draft, setDraft] = useState<MenuTab[]>([]);
   const [dirty, setDirty] = useState(false);
   const [tabId, setTabId] = useState("");
@@ -26,6 +41,10 @@ export function MenuSettingsPage() {
   const [newName, setNewName] = useState("");
   const [newPrice, setNewPrice] = useState("");
   const [newDescription, setNewDescription] = useState("");
+
+  useEffect(() => {
+    setDirty(false);
+  }, [kind]);
 
   useEffect(() => {
     if (dirty) return;
@@ -40,7 +59,7 @@ export function MenuSettingsPage() {
     });
     // Only re-seed draft when server menu changes and local edits are clean.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tabId intentionally omitted
-  }, [menu, dirty]);
+  }, [menu, dirty, kind]);
 
   const activeTab = draft.find((t) => t.id === tabId) ?? draft[0];
   const activeSub =
@@ -212,14 +231,18 @@ export function MenuSettingsPage() {
 
   const saveMutation = useMutation({
     mutationFn: () =>
-      apiFetch<RestaurantMenuResponse>("/restaurant-menu", {
+      apiFetch<RestaurantMenuResponse>(apiPath, {
         method: "PUT",
         body: JSON.stringify({ tabs: draft }),
       }),
     onSuccess: (data) => {
-      queryClient.setQueryData(["restaurant-menu"], data);
+      queryClient.setQueryData([queryKey], data);
       setDirty(false);
-      toast.success("Меню сохранено — цены обновлены для банкетов");
+      toast.success(
+        kind === "takeaway"
+          ? "Меню на вынос сохранено"
+          : "Меню сохранено — цены обновлены для банкетов",
+      );
     },
     onError: (e) => {
       if (e instanceof ApiError) toast.error(e.message);
@@ -250,8 +273,10 @@ export function MenuSettingsPage() {
           </div>
           <h1 className="text-2xl font-bold">Настройки меню</h1>
           <p className="text-sm text-muted-foreground">
-            Редактируйте цены и добавляйте позиции. После сохранения меню обновится в банкетах.
-            {isCustom ? " · Сейчас используется сохранённое меню" : " · Стандартное меню"}
+            {kind === "takeaway"
+              ? "Меню для заказов на вынос (без обслуживания)."
+              : "Меню банкетов: к сумме блюд добавляется 10% обслуживание."}{" "}
+            {isCustom ? "· Сейчас используется сохранённое меню" : "· Стандартное меню"}
             {` · ${itemCount} позиций`}
           </p>
         </div>
@@ -267,6 +292,34 @@ export function MenuSettingsPage() {
             {saveMutation.isPending ? "Сохранение…" : dirty ? "Сохранить" : "Сохранено"}
           </Button>
         </div>
+      </div>
+
+      <div className="mb-4 flex gap-1.5">
+        {(
+          [
+            { id: "restaurant", label: "Банкет / ресторан" },
+            { id: "takeaway", label: "На вынос" },
+          ] as const
+        ).map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => {
+              if (kind === item.id) return;
+              if (dirty && !confirm("Есть несохранённые правки. Переключить меню?")) return;
+              setDirty(false);
+              setKind(item.id);
+            }}
+            className={cn(
+              "rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+              kind === item.id
+                ? "bg-foreground text-background"
+                : "bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground",
+            )}
+          >
+            {item.label}
+          </button>
+        ))}
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card">
@@ -444,7 +497,8 @@ export function MenuSettingsPage() {
               Добавить в список
             </Button>
             <p className="mt-2 text-xs text-muted-foreground">
-              После добавления нажмите «Сохранить» сверху, чтобы меню обновилось в банкетах.
+              После добавления нажмите «Сохранить» сверху, чтобы меню обновилось
+              {kind === "takeaway" ? " в заказах на вынос." : " в банкетах."}
             </p>
           </div>
         </div>

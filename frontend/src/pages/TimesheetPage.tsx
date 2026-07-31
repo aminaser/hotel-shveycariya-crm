@@ -1,13 +1,36 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, Pencil, Plus, Trash2, Users, Wallet } from "lucide-react";
+import {
+  addMonths,
+  eachDayOfInterval,
+  endOfMonth,
+  endOfWeek,
+  format,
+  isSameMonth,
+  parseISO,
+  startOfMonth,
+  startOfWeek,
+} from "date-fns";
+import { ru } from "date-fns/locale";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Pencil,
+  Plus,
+  Trash2,
+  Users,
+  Wallet,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { apiFetch, ApiError } from "@/api/client";
-import type { Employee, TimesheetDaySummary, Workplace } from "@/api/types";
-import { Badge } from "@/components/ui/badge";
+import type {
+  Employee,
+  TimesheetShift,
+  TimesheetWeekSummary,
+  Workplace,
+} from "@/api/types";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -24,6 +47,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { canManagePrices, useAuthStore } from "@/stores/auth";
+import { cn } from "@/lib/utils";
 
 const WORKPLACE_LABEL: Record<Workplace, string> = {
   letnik: "Летник",
@@ -31,11 +56,11 @@ const WORKPLACE_LABEL: Record<Workplace, string> = {
   banquet: "Банкет",
 };
 
-const WORKPLACE_SUMMARY: { key: Workplace; title: string }[] = [
-  { key: "letnik", title: "На летнике" },
-  { key: "bar", title: "В баре" },
-  { key: "banquet", title: "На банкете" },
-];
+const WORKPLACE_STYLE: Record<Workplace, string> = {
+  letnik: "border-emerald-200 bg-emerald-50 text-emerald-900",
+  bar: "border-sky-200 bg-sky-50 text-sky-900",
+  banquet: "border-amber-200 bg-amber-50 text-amber-950",
+};
 
 const TIME_OPTIONS = (() => {
   const options: string[] = [];
@@ -47,12 +72,14 @@ const TIME_OPTIONS = (() => {
   return options;
 })();
 
+const WEEKDAY_SHORT = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"];
+
+function toIsoDate(d: Date): string {
+  return format(d, "yyyy-MM-dd");
+}
+
 function todayLocal(): string {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  return toIsoDate(new Date());
 }
 
 function formatMoney(value: string | number): string {
@@ -60,18 +87,12 @@ function formatMoney(value: string | number): string {
   return `${Math.round(num).toLocaleString("ru-KZ")} ₸`;
 }
 
-function formatDateLabel(iso: string): string {
-  const [y, m, d] = iso.split("-");
-  return `${d}.${m}.${y}`;
-}
-
-function isToday(iso: string): boolean {
-  return iso === todayLocal();
-}
-
 export function TimesheetPage() {
   const queryClient = useQueryClient();
-  const [workDate, setWorkDate] = useState(todayLocal());
+  const user = useAuthStore((s) => s.user);
+  const isOwner = canManagePrices(user);
+
+  const [monthAnchor, setMonthAnchor] = useState(todayLocal());
   const [employeeOpen, setEmployeeOpen] = useState(false);
   const [shiftOpen, setShiftOpen] = useState(false);
   const [editEmployee, setEditEmployee] = useState<Employee | null>(null);
@@ -85,56 +106,68 @@ export function TimesheetPage() {
 
   const [shiftForm, setShiftForm] = useState({
     employee_id: "",
+    work_date: todayLocal(),
     start_time: "08:00",
     end_time: "16:00",
     workplace: "letnik" as Workplace,
   });
+
+  const monthDate = useMemo(() => startOfMonth(parseISO(monthAnchor)), [monthAnchor]);
+  const dateFrom = useMemo(() => toIsoDate(startOfMonth(monthDate)), [monthDate]);
+  const dateTo = useMemo(() => toIsoDate(endOfMonth(monthDate)), [monthDate]);
+
+  const calendarDays = useMemo(() => {
+    const gridStart = startOfWeek(startOfMonth(monthDate), { weekStartsOn: 1 });
+    const gridEnd = endOfWeek(endOfMonth(monthDate), { weekStartsOn: 1 });
+    return eachDayOfInterval({ start: gridStart, end: gridEnd }).map((d) => ({
+      iso: toIsoDate(d),
+      inMonth: isSameMonth(d, monthDate),
+    }));
+  }, [monthDate]);
 
   const { data: employees = [], isLoading: employeesLoading } = useQuery({
     queryKey: ["employees"],
     queryFn: () => apiFetch<Employee[]>("/employees"),
   });
 
-  const { data: daySummary, isLoading: dayLoading } = useQuery({
-    queryKey: ["timesheet", workDate],
-    queryFn: () => apiFetch<TimesheetDaySummary>(`/timesheet?work_date=${workDate}`),
+  const { data: monthSummary, isLoading: monthLoading } = useQuery({
+    queryKey: ["timesheet-month", dateFrom, dateTo],
+    queryFn: () =>
+      apiFetch<TimesheetWeekSummary>(
+        `/timesheet/week?date_from=${dateFrom}&date_to=${dateTo}`,
+      ),
   });
 
-  const shifts = daySummary?.shifts ?? [];
-
-  const onShiftEmployees = useMemo(() => {
-    const list = daySummary?.shifts ?? [];
-    const ids = new Set(list.map((s) => s.employee_id));
-    return employees.filter((e) => ids.has(e.id));
-  }, [employees, daySummary]);
-
-  const waitersByWorkplace = useMemo(() => {
-    const groups: Record<Workplace, string[]> = {
-      letnik: [],
-      bar: [],
-      banquet: [],
-    };
-    for (const shift of daySummary?.shifts ?? []) {
-      if (!groups[shift.workplace].includes(shift.employee_name)) {
-        groups[shift.workplace].push(shift.employee_name);
-      }
+  const shiftsByDay = useMemo(() => {
+    const map = new Map<string, TimesheetShift[]>();
+    for (const shift of monthSummary?.shifts ?? []) {
+      const list = map.get(shift.work_date) ?? [];
+      list.push(shift);
+      map.set(shift.work_date, list);
     }
-    return groups;
-  }, [daySummary]);
+    return map;
+  }, [monthSummary]);
 
   const resetEmployeeForm = () => {
     setEmployeeForm({ full_name: "", position: "официант", hourly_rate: "750" });
     setEditEmployee(null);
   };
 
-  const resetShiftForm = () => {
+  const resetShiftForm = (workDate = todayLocal()) => {
     setShiftForm({
       employee_id: employees[0] ? String(employees[0].id) : "",
+      work_date: workDate,
       start_time: "08:00",
       end_time: "16:00",
       workplace: "letnik",
     });
     setEditShiftId(null);
+  };
+
+  const invalidateMonth = () => {
+    void queryClient.invalidateQueries({ queryKey: ["timesheet-month"] });
+    void queryClient.invalidateQueries({ queryKey: ["timesheet-week"] });
+    void queryClient.invalidateQueries({ queryKey: ["timesheet"] });
   };
 
   const saveEmployee = useMutation({
@@ -169,7 +202,7 @@ export function TimesheetPage() {
     onSuccess: () => {
       toast.success("Сотрудник удалён из штата");
       void queryClient.invalidateQueries({ queryKey: ["employees"] });
-      void queryClient.invalidateQueries({ queryKey: ["timesheet"] });
+      invalidateMonth();
     },
     onError: (error) => {
       if (error instanceof ApiError) toast.error(error.message);
@@ -183,7 +216,7 @@ export function TimesheetPage() {
       const employee = employees.find((e) => e.id === employeeId);
       const body = {
         employee_id: employeeId,
-        work_date: workDate,
+        work_date: shiftForm.work_date,
         start_time: shiftForm.start_time,
         end_time: shiftForm.end_time,
         workplace: shiftForm.workplace,
@@ -198,10 +231,10 @@ export function TimesheetPage() {
       return apiFetch("/timesheet", { method: "POST", body: JSON.stringify(body) });
     },
     onSuccess: () => {
-      toast.success(editShiftId ? "Смена обновлена" : "Смена добавлена");
+      toast.success(editShiftId ? "Смена обновлена" : "Смена добавлена в ростер");
       setShiftOpen(false);
       resetShiftForm();
-      void queryClient.invalidateQueries({ queryKey: ["timesheet"] });
+      invalidateMonth();
     },
     onError: (error) => {
       if (error instanceof ApiError) toast.error(error.message);
@@ -213,7 +246,7 @@ export function TimesheetPage() {
     mutationFn: (id: number) => apiFetch(`/timesheet/${id}`, { method: "DELETE" }),
     onSuccess: () => {
       toast.success("Смена удалена");
-      void queryClient.invalidateQueries({ queryKey: ["timesheet"] });
+      invalidateMonth();
     },
     onError: (error) => {
       if (error instanceof ApiError) toast.error(error.message);
@@ -236,18 +269,23 @@ export function TimesheetPage() {
     setEmployeeOpen(true);
   };
 
-  const openAddShift = () => {
-    resetShiftForm();
+  const openAddShift = (workDate: string) => {
+    resetShiftForm(workDate);
     if (employees[0]) {
-      setShiftForm((prev) => ({ ...prev, employee_id: String(employees[0].id) }));
+      setShiftForm((prev) => ({
+        ...prev,
+        work_date: workDate,
+        employee_id: String(employees[0].id),
+      }));
     }
     setShiftOpen(true);
   };
 
-  const openEditShift = (shift: TimesheetDaySummary["shifts"][number]) => {
+  const openEditShift = (shift: TimesheetShift) => {
     setEditShiftId(shift.id);
     setShiftForm({
       employee_id: String(shift.employee_id),
+      work_date: shift.work_date,
       start_time: shift.start_time,
       end_time: shift.end_time,
       workplace: shift.workplace,
@@ -255,242 +293,289 @@ export function TimesheetPage() {
     setShiftOpen(true);
   };
 
+  const goPrevMonth = () => setMonthAnchor(toIsoDate(addMonths(monthDate, -1)));
+  const goNextMonth = () => setMonthAnchor(toIsoDate(addMonths(monthDate, 1)));
+  const goThisMonth = () => setMonthAnchor(todayLocal());
+
+  const monthLabel = format(monthDate, "LLLL yyyy", { locale: ru });
+
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-6 p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Табель</h1>
+          <h1 className="text-2xl font-bold">Табель · ростер</h1>
           <p className="text-sm text-muted-foreground">
-            Штат сотрудников, график смен и расходы на зарплату
+            {isOwner
+              ? "Месячное расписание смен и расчёт зарплаты"
+              : "Месячное расписание смен"}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
-            <CalendarDays className="h-4 w-4 text-muted-foreground" />
-            <Input
-              type="date"
-              className="w-[150px] border-0 p-0 shadow-none focus-visible:ring-0"
-              value={workDate}
-              onChange={(e) => setWorkDate(e.target.value)}
-            />
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="icon" onClick={goPrevMonth} aria-label="Прошлый месяц">
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <div className="min-w-[180px] rounded-lg border border-border bg-card px-3 py-2 text-center text-sm font-medium capitalize">
+            {monthLabel}
           </div>
-          <Button variant="outline" onClick={() => setWorkDate(todayLocal())}>
-            Сегодня
+          <Button variant="outline" size="icon" onClick={goNextMonth} aria-label="Следующий месяц">
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+          <Button variant="outline" onClick={goThisMonth}>
+            Этот месяц
           </Button>
         </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              На смене {isToday(workDate) ? "сегодня" : formatDateLabel(workDate)}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{shifts.length}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {onShiftEmployees.map((e) => e.full_name).join(", ") || "Никого не назначено"}
-            </p>
-          </CardContent>
-        </Card>
-        {WORKPLACE_SUMMARY.map(({ key, title }) => (
-          <Card key={key}>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {waitersByWorkplace[key].length > 0 ? (
-                <div className="space-y-1">
-                  {waitersByWorkplace[key].map((name) => (
-                    <div key={name} className="font-medium leading-snug">
-                      {name}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">Никого не назначено</p>
-              )}
-            </CardContent>
-          </Card>
-        ))}
-        <Card className="border-amber-200 bg-amber-50/50 sm:col-span-2 xl:col-span-1">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-amber-900 flex items-center gap-2">
-              <Wallet className="h-4 w-4" />
-              Расход на зарплату
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-amber-950">
-              {daySummary ? formatMoney(daySummary.total_salary) : "0 ₸"}
-            </div>
-            <p className="text-xs text-amber-800/80 mt-1">
-              Официанты — 750 ₸/час (настраивается у сотрудника)
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-[360px_1fr]">
-        <section className="rounded-xl border border-border bg-card">
-          <div className="flex items-center justify-between border-b border-border px-4 py-3">
-            <div className="flex items-center gap-2 font-semibold">
-              <Users className="h-4 w-4" />
-              В штате
-            </div>
-            <Button size="sm" onClick={openAddEmployee}>
-              <Plus className="h-4 w-4" />
-              Добавить
-            </Button>
-          </div>
-          <div className="p-4 space-y-2 max-h-[520px] overflow-y-auto">
-            {employeesLoading ? (
-              <p className="text-sm text-muted-foreground">Загрузка...</p>
-            ) : employees.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Добавьте сотрудников — например, Андрей и Карим.
-              </p>
-            ) : (
-              employees.map((employee) => (
-                <div
-                  key={employee.id}
-                  className="flex items-start justify-between gap-2 rounded-lg border border-border px-3 py-2.5"
-                >
-                  <div>
-                    <div className="font-medium">{employee.full_name}</div>
-                    <div className="text-xs text-muted-foreground capitalize">
-                      {employee.position} · {formatMoney(employee.hourly_rate)}/час
-                    </div>
-                  </div>
-                  <div className="flex gap-1">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-8 w-8"
-                      onClick={() => openEditEmployee(employee)}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-8 w-8 text-destructive"
-                      onClick={() => {
-                        if (confirm(`Удалить ${employee.full_name} из штата?`)) {
-                          deleteEmployee.mutate(employee.id);
-                        }
-                      }}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-
-        <section className="rounded-xl border border-border bg-card">
-          <div className="flex items-center justify-between border-b border-border px-4 py-3">
-            <div>
-              <div className="font-semibold">
-                График на {isToday(workDate) ? "сегодня" : formatDateLabel(workDate)}
+      <div
+        className={cn(
+          "grid gap-6",
+          isOwner ? "xl:grid-cols-[280px_1fr]" : "grid-cols-1",
+        )}
+      >
+        {isOwner && (
+          <section className="rounded-xl border border-border bg-card">
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <div className="flex items-center gap-2 font-semibold">
+                <Users className="h-4 w-4" />
+                В штате
               </div>
-              <p className="text-xs text-muted-foreground">
-                Кто вышел на работу, часы и место (летник, бар, банкет)
-              </p>
+              <Button size="sm" onClick={openAddEmployee}>
+                <Plus className="h-4 w-4" />
+                Добавить
+              </Button>
             </div>
-            <Button size="sm" onClick={openAddShift} disabled={employees.length === 0}>
-              <Plus className="h-4 w-4" />
-              Добавить смену
-            </Button>
+            <div className="max-h-[720px] space-y-2 overflow-y-auto p-4">
+              {employeesLoading ? (
+                <p className="text-sm text-muted-foreground">Загрузка...</p>
+              ) : employees.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Добавьте сотрудников — затем ставьте их в ростер.
+                </p>
+              ) : (
+                employees.map((employee) => (
+                  <div
+                    key={employee.id}
+                    className="flex items-start justify-between gap-2 rounded-lg border border-border px-3 py-2.5"
+                  >
+                    <div>
+                      <div className="font-medium">{employee.full_name}</div>
+                      <div className="text-xs capitalize text-muted-foreground">
+                        {employee.position} · {formatMoney(employee.hourly_rate)}/час
+                      </div>
+                    </div>
+                    <div className="flex gap-1">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8"
+                        onClick={() => openEditEmployee(employee)}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8 text-destructive"
+                        onClick={() => {
+                          if (confirm(`Удалить ${employee.full_name} из штата?`)) {
+                            deleteEmployee.mutate(employee.id);
+                          }
+                        }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+        )}
+
+        <section className="min-w-0 space-y-4">
+          <div className="overflow-x-auto rounded-xl border border-border bg-card">
+            <div className="grid min-w-[980px] grid-cols-7 border-b border-border bg-muted/40">
+              {WEEKDAY_SHORT.map((label) => (
+                <div
+                  key={label}
+                  className="border-r border-border px-3 py-2 text-center text-[11px] font-medium uppercase tracking-wide text-muted-foreground last:border-r-0"
+                >
+                  {label}
+                </div>
+              ))}
+            </div>
+
+            <div className="grid min-w-[980px] grid-cols-7">
+              {calendarDays.map(({ iso, inMonth }) => {
+                const dayShifts = inMonth ? shiftsByDay.get(iso) ?? [] : [];
+                const isCurrent = iso === todayLocal();
+                const dayNum = format(parseISO(iso), "d");
+                return (
+                  <div
+                    key={iso}
+                    className={cn(
+                      "min-h-[140px] border-b border-r border-border p-1.5 last:border-r-0",
+                      !inMonth && "bg-muted/20",
+                      isCurrent && inMonth && "bg-emerald-50/40",
+                    )}
+                  >
+                    <div className="mb-1 flex items-center justify-between gap-1 px-0.5">
+                      <span
+                        className={cn(
+                          "flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold",
+                          !inMonth && "text-muted-foreground/50",
+                          isCurrent && inMonth && "bg-emerald-600 text-white",
+                        )}
+                      >
+                        {dayNum}
+                      </span>
+                      {inMonth && (
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-6 w-6"
+                          disabled={employees.length === 0}
+                          onClick={() => openAddShift(iso)}
+                          aria-label={`Добавить смену на ${iso}`}
+                        >
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                      )}
+                    </div>
+
+                    {!inMonth ? null : monthLoading ? (
+                      <p className="px-1 py-4 text-center text-[10px] text-muted-foreground">…</p>
+                    ) : dayShifts.length === 0 ? (
+                      <button
+                        type="button"
+                        disabled={employees.length === 0}
+                        onClick={() => openAddShift(iso)}
+                        className="flex w-full flex-col items-center justify-center rounded-md border border-dashed border-border/70 px-1 py-3 text-[10px] text-muted-foreground transition-colors hover:border-emerald-400 hover:bg-emerald-50/40 disabled:pointer-events-none"
+                      >
+                        <Plus className="mb-0.5 h-3 w-3 opacity-40" />
+                        Смена
+                      </button>
+                    ) : (
+                      <ul className="space-y-1">
+                        {dayShifts.map((shift) => (
+                          <li key={shift.id}>
+                            <button
+                              type="button"
+                              onClick={() => openEditShift(shift)}
+                              className={cn(
+                                "w-full rounded-md border px-1.5 py-1 text-left transition-shadow hover:shadow-sm",
+                                WORKPLACE_STYLE[shift.workplace],
+                              )}
+                            >
+                              <div className="truncate text-[11px] font-semibold leading-tight">
+                                {shift.employee_name}
+                              </div>
+                              <div className="font-mono text-[10px] opacity-80">
+                                {shift.start_time}–{shift.end_time}
+                              </div>
+                              <div className="mt-0.5 flex items-center justify-between gap-1">
+                                <span className="truncate text-[9px] font-medium opacity-70">
+                                  {WORKPLACE_LABEL[shift.workplace]}
+                                </span>
+                                <span
+                                  role="button"
+                                  tabIndex={0}
+                                  className="rounded p-0.5 opacity-50 hover:bg-black/5 hover:opacity-100"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (confirm("Удалить смену?")) {
+                                      deleteShift.mutate(shift.id);
+                                    }
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                      e.stopPropagation();
+                                      if (confirm("Удалить смену?")) {
+                                        deleteShift.mutate(shift.id);
+                                      }
+                                    }
+                                  }}
+                                  aria-label="Удалить смену"
+                                >
+                                  <Trash2 className="h-2.5 w-2.5" />
+                                </span>
+                              </div>
+                            </button>
+                          </li>
+                        ))}
+                        <li>
+                          <button
+                            type="button"
+                            disabled={employees.length === 0}
+                            onClick={() => openAddShift(iso)}
+                            className="flex w-full items-center justify-center gap-0.5 rounded-md border border-dashed border-border/60 py-0.5 text-[9px] text-muted-foreground hover:bg-muted/40"
+                          >
+                            <Plus className="h-2.5 w-2.5" />
+                            Ещё
+                          </button>
+                        </li>
+                      </ul>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted/40 text-left">
-                  <th className="px-4 py-3 font-medium">Сотрудник</th>
-                  <th className="px-4 py-3 font-medium">Место</th>
-                  <th className="px-4 py-3 font-medium">Время</th>
-                  <th className="px-4 py-3 font-medium">Часы</th>
-                  <th className="px-4 py-3 font-medium">Заработок</th>
-                  <th className="px-4 py-3 font-medium w-20" />
-                </tr>
-              </thead>
-              <tbody>
-                {dayLoading ? (
-                  <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
-                      Загрузка...
-                    </td>
-                  </tr>
-                ) : shifts.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
-                      На эту дату смен нет. Нажмите «Добавить смену».
-                    </td>
-                  </tr>
+          {isOwner && (
+            <section className="rounded-xl border border-amber-200 bg-amber-50/40">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-200/70 px-4 py-3">
+                <div className="flex items-center gap-2 font-semibold capitalize text-amber-950">
+                  <Wallet className="h-4 w-4" />
+                  Расчёт зарплаты · {monthLabel}
+                </div>
+                <div className="text-sm text-amber-900/80">
+                  Итого:{" "}
+                  <span className="text-lg font-bold text-amber-950">
+                    {monthSummary ? formatMoney(monthSummary.total_salary) : "0 ₸"}
+                  </span>
+                  <span className="ml-2 text-xs">
+                    · {monthSummary ? Number(monthSummary.total_hours).toLocaleString("ru-KZ") : "0"} ч
+                  </span>
+                </div>
+              </div>
+              <div className="overflow-x-auto p-2">
+                {(monthSummary?.by_employee.length ?? 0) === 0 ? (
+                  <p className="px-3 py-6 text-sm text-amber-900/70">
+                    За этот месяц смен нет — поставьте сотрудников в ростер.
+                  </p>
                 ) : (
-                  shifts.map((shift) => (
-                    <tr key={shift.id} className="border-b border-border/70">
-                      <td className="px-4 py-3">
-                        <div className="font-medium">{shift.employee_name}</div>
-                        <div className="text-xs text-muted-foreground capitalize">{shift.position}</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <Badge variant="secondary">{WORKPLACE_LABEL[shift.workplace]}</Badge>
-                      </td>
-                      <td className="px-4 py-3 font-mono">
-                        {shift.start_time} – {shift.end_time}
-                      </td>
-                      <td className="px-4 py-3">{Number(shift.hours_worked).toLocaleString("ru-KZ")}</td>
-                      <td className="px-4 py-3 font-medium">{formatMoney(shift.earnings)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-1">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-8 w-8"
-                            onClick={() => openEditShift(shift)}
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-8 w-8 text-destructive"
-                            onClick={() => {
-                              if (confirm("Удалить смену?")) deleteShift.mutate(shift.id);
-                            }}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs uppercase tracking-wide text-amber-900/60">
+                        <th className="px-3 py-2 font-medium">Сотрудник</th>
+                        <th className="px-3 py-2 font-medium">Смен</th>
+                        <th className="px-3 py-2 font-medium">Часы</th>
+                        <th className="px-3 py-2 font-medium">К выплате</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {monthSummary?.by_employee.map((row) => (
+                        <tr key={row.employee_id} className="border-t border-amber-200/60">
+                          <td className="px-3 py-2.5">
+                            <div className="font-medium text-amber-950">{row.employee_name}</div>
+                            <div className="text-xs capitalize text-amber-900/60">{row.position}</div>
+                          </td>
+                          <td className="px-3 py-2.5">{row.shifts_count}</td>
+                          <td className="px-3 py-2.5">
+                            {Number(row.total_hours).toLocaleString("ru-KZ")}
+                          </td>
+                          <td className="px-3 py-2.5 font-semibold text-amber-950">
+                            {formatMoney(row.total_salary)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 )}
-              </tbody>
-              {shifts.length > 0 && (
-                <tfoot>
-                  <tr className="bg-muted/30 font-medium">
-                    <td className="px-4 py-3" colSpan={3}>
-                      Итого за день
-                    </td>
-                    <td className="px-4 py-3">
-                      {daySummary ? Number(daySummary.total_hours).toLocaleString("ru-KZ") : "0"}
-                    </td>
-                    <td className="px-4 py-3">
-                      {daySummary ? formatMoney(daySummary.total_salary) : "0 ₸"}
-                    </td>
-                    <td />
-                  </tr>
-                </tfoot>
-              )}
-            </table>
-          </div>
+              </div>
+            </section>
+          )}
         </section>
       </div>
 
@@ -503,7 +588,9 @@ export function TimesheetPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{editEmployee ? "Редактировать сотрудника" : "Добавить сотрудника"}</DialogTitle>
+            <DialogTitle>
+              {editEmployee ? "Редактировать сотрудника" : "Добавить сотрудника"}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div>
@@ -556,9 +643,17 @@ export function TimesheetPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{editShiftId ? "Редактировать смену" : "Добавить смену"}</DialogTitle>
+            <DialogTitle>{editShiftId ? "Редактировать смену" : "Добавить в ростер"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+            <div>
+              <Label>Дата</Label>
+              <Input
+                type="date"
+                value={shiftForm.work_date}
+                onChange={(e) => setShiftForm((f) => ({ ...f, work_date: e.target.value }))}
+              />
+            </div>
             <div>
               <Label>Сотрудник</Label>
               <Select

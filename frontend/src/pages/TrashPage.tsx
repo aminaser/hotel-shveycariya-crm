@@ -12,9 +12,10 @@ import {
   isSupabaseConfigured,
   supabase,
 } from "@/lib/supabase";
+import { useAuthStore } from "@/stores/auth";
 
 interface CrmTrashItem {
-  type: "stay" | "client" | "banquet";
+  type: "stay" | "client" | "banquet" | "takeaway";
   id: number;
   title: string;
   subtitle: string | null;
@@ -37,6 +38,7 @@ const TYPE_LABEL: Record<string, string> = {
   stay: "Журнал",
   client: "Клиенты",
   banquet: "Банкеты",
+  takeaway: "На вынос",
   spa: "Сауна / баня",
   request: "Заявки",
 };
@@ -155,6 +157,7 @@ function formatDate(isoDate: string): string {
 
 export function TrashPage() {
   const queryClient = useQueryClient();
+  const isOwner = useAuthStore((s) => s.isOwner());
 
   const { data: crmTrash = [], isLoading: crmLoading } = useQuery({
     queryKey: ["crm-trash"],
@@ -186,6 +189,7 @@ export function TrashPage() {
     void queryClient.invalidateQueries({ queryKey: ["stays-summary"] });
     void queryClient.invalidateQueries({ queryKey: ["clients"] });
     void queryClient.invalidateQueries({ queryKey: ["banquets"] });
+    void queryClient.invalidateQueries({ queryKey: ["takeaway-orders"] });
     void queryClient.invalidateQueries({ queryKey: ["rooms"] });
   };
 
@@ -314,11 +318,11 @@ export function TrashPage() {
             Корзина
           </h1>
           <p className="text-sm text-muted-foreground">
-            Удалённые записи из всех разделов CRM. Их можно восстановить или очистить
-            корзину целиком навсегда.
+            Удалённые записи из всех разделов CRM. Их можно восстановить
+            {isOwner ? " или очистить корзину целиком навсегда." : "."}
           </p>
         </div>
-        {trashCount > 0 && (
+        {isOwner && trashCount > 0 && (
           <Button
             size="sm"
             variant="outline"

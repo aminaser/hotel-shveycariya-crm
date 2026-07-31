@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { Pencil } from "lucide-react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { apiFetch, ApiError } from "@/api/client";
@@ -24,6 +25,7 @@ import {
 } from "@/components/ui/select";
 import { formatDate, roomStatusLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { canManagePrices, useAuthStore } from "@/stores/auth";
 
 const STATUS_OPTIONS: RoomStatus[] = ["occupied", "free", "cleaning", "booked", "maintenance"];
 
@@ -84,7 +86,12 @@ interface CheckInForm {
 
 export function RoomsPage() {
   const queryClient = useQueryClient();
+  const user = useAuthStore((s) => s.user);
+  const canEditPrices = canManagePrices(user);
   const [checkInRoom, setCheckInRoom] = useState<Room | null>(null);
+  const [pricesOpen, setPricesOpen] = useState(false);
+  const [priceDraft, setPriceDraft] = useState<Record<number, string>>({});
+  const [typeDraft, setTypeDraft] = useState<Record<number, string>>({});
   const [form, setForm] = useState<CheckInForm>({
     guestName: "",
     phone: "",
@@ -97,6 +104,19 @@ export function RoomsPage() {
     queryFn: () => apiFetch<Room[]>("/rooms"),
     refetchInterval: 20_000,
   });
+
+  useEffect(() => {
+    if (!pricesOpen) return;
+    const nextPrices: Record<number, string> = {};
+    const nextTypes: Record<number, string> = {};
+    for (const room of rooms) {
+      nextPrices[room.id] =
+        room.price_per_night != null ? String(Math.round(Number(room.price_per_night))) : "";
+      nextTypes[room.id] = room.room_type ?? "";
+    }
+    setPriceDraft(nextPrices);
+    setTypeDraft(nextTypes);
+  }, [pricesOpen, rooms]);
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["rooms"] });
@@ -114,6 +134,42 @@ export function RoomsPage() {
     onError: (error) => {
       if (error instanceof ApiError) toast.error(error.message);
       else toast.error("Не удалось обновить статус");
+    },
+  });
+
+  const savePrices = useMutation({
+    mutationFn: async () => {
+      const list = [...rooms].sort((a, b) => roomSortKey(a) - roomSortKey(b));
+      const updates = list.filter((room) => {
+        const priceRaw = (priceDraft[room.id] ?? "").trim();
+        const typeRaw = (typeDraft[room.id] ?? "").trim();
+        const nextPrice = priceRaw === "" ? null : Math.max(0, Number(priceRaw) || 0);
+        const prevPrice =
+          room.price_per_night != null ? Math.round(Number(room.price_per_night)) : null;
+        const prevType = (room.room_type ?? "").trim();
+        return nextPrice !== prevPrice || typeRaw !== prevType;
+      });
+      for (const room of updates) {
+        const priceRaw = (priceDraft[room.id] ?? "").trim();
+        const typeRaw = (typeDraft[room.id] ?? "").trim();
+        await apiFetch(`/rooms/${room.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            price_per_night: priceRaw === "" ? null : Math.max(0, Number(priceRaw) || 0),
+            room_type: typeRaw || null,
+          }),
+        });
+      }
+      return updates.length;
+    },
+    onSuccess: (count) => {
+      toast.success(count > 0 ? `Цены обновлены (${count})` : "Изменений нет");
+      setPricesOpen(false);
+      invalidate();
+    },
+    onError: (error) => {
+      if (error instanceof ApiError) toast.error(error.message);
+      else toast.error("Не удалось сохранить цены");
     },
   });
 
@@ -204,11 +260,17 @@ export function RoomsPage() {
             Расценки за сутки · завтрак включён · выезд до 12:00 · заезд с 13:00
           </p>
         </div>
-        <div className="flex gap-2 text-sm">
-          <span className="rounded-full bg-emerald-100 px-3 py-1 text-emerald-800">
+        <div className="flex flex-wrap items-center gap-2">
+          {canEditPrices && (
+            <Button variant="outline" size="sm" onClick={() => setPricesOpen(true)}>
+              <Pencil className="h-4 w-4" />
+              Редактировать цены
+            </Button>
+          )}
+          <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm text-emerald-800">
             Свободно: {freeCount}
           </span>
-          <span className="rounded-full bg-red-100 px-3 py-1 text-red-800">
+          <span className="rounded-full bg-red-100 px-3 py-1 text-sm text-red-800">
             Занято: {occupiedCount}
           </span>
         </div>
@@ -377,6 +439,56 @@ export function RoomsPage() {
             </Button>
             <Button onClick={() => checkIn.mutate()} disabled={checkIn.isPending}>
               {checkIn.isPending ? "Заселение…" : "Заселить"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={pricesOpen} onOpenChange={setPricesOpen}>
+        <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Цены на номера</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Только для Жибек. Цена — за сутки, завтрак включён.
+          </p>
+          <div className="mt-2 space-y-3">
+            {ordered.map((room) => (
+              <div
+                key={room.id}
+                className="grid grid-cols-[48px_1fr_1fr] items-end gap-2 rounded-lg border border-border p-2.5"
+              >
+                <div className="pb-2 text-lg font-bold">№{room.number}</div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Цена, ₸</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={priceDraft[room.id] ?? ""}
+                    onChange={(e) =>
+                      setPriceDraft((prev) => ({ ...prev, [room.id]: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Тип</Label>
+                  <Input
+                    value={typeDraft[room.id] ?? ""}
+                    onChange={(e) =>
+                      setTypeDraft((prev) => ({ ...prev, [room.id]: e.target.value }))
+                    }
+                    placeholder="одноместный…"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPricesOpen(false)}>
+              Отмена
+            </Button>
+            <Button onClick={() => savePrices.mutate()} disabled={savePrices.isPending}>
+              {savePrices.isPending ? "Сохранение…" : "Сохранить цены"}
             </Button>
           </DialogFooter>
         </DialogContent>

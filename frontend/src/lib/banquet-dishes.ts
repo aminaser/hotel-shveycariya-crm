@@ -1,5 +1,9 @@
 import { formatMoney } from "@/lib/format";
 
+/** Service charge applied to banquet orders only (not takeaway). */
+export const BANQUET_SERVICE_CHARGE_RATE = 0.1;
+export const BANQUET_SERVICE_CHARGE_PERCENT = 10;
+
 export interface OrderedDish {
   key: string;
   name: string;
@@ -20,6 +24,21 @@ export function dishLineTotal(item: OrderedDish): number {
 
 export function dishesTotal(items: OrderedDish[]): number {
   return items.reduce((sum, item) => sum + dishLineTotal(item), 0);
+}
+
+export function serviceChargeAmount(subtotal: number): number {
+  if (subtotal <= 0) return 0;
+  return Math.round(subtotal * BANQUET_SERVICE_CHARGE_RATE);
+}
+
+export function dishesTotalWithService(items: OrderedDish[]): {
+  subtotal: number;
+  service: number;
+  total: number;
+} {
+  const subtotal = dishesTotal(items);
+  const service = serviceChargeAmount(subtotal);
+  return { subtotal, service, total: subtotal + service };
 }
 
 export function dishDisplayName(item: Pick<OrderedDish, "name" | "size">): string {
@@ -78,7 +97,10 @@ export function parseDishes(raw: string | null | undefined): {
   return { items: [], note: raw.trim(), legacy: true };
 }
 
-export function formatDishesPreview(raw: string | null | undefined): string {
+export function formatDishesPreview(
+  raw: string | null | undefined,
+  options?: { serviceCharge?: boolean },
+): string {
   if (!raw?.trim()) return "—";
   const { items, note, legacy } = parseDishes(raw);
   if (legacy) return note;
@@ -87,8 +109,14 @@ export function formatDishesPreview(raw: string | null | undefined): string {
   const lines = items.map(
     (item) => `${dishDisplayName(item)} × ${item.quantity} — ${formatMoney(dishLineTotal(item))}`,
   );
-  const total = dishesTotal(items);
-  lines.push(`Итого: ${formatMoney(total)}`);
+  const { subtotal, service, total } = dishesTotalWithService(items);
+  if (options?.serviceCharge && service > 0) {
+    lines.push(`Блюда: ${formatMoney(subtotal)}`);
+    lines.push(`Обслуживание ${BANQUET_SERVICE_CHARGE_PERCENT}%: ${formatMoney(service)}`);
+    lines.push(`Итого: ${formatMoney(total)}`);
+  } else {
+    lines.push(`Итого: ${formatMoney(subtotal)}`);
+  }
   if (note) lines.push(note);
   return lines.join("\n");
 }

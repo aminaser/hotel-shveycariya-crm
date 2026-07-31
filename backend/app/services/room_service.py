@@ -89,16 +89,22 @@ def get_active_stay(db: Session, room_id: int, exclude_stay_id: int | None = Non
     pending_today = [
         s
         for s in open_stays
-        if stay_check_in_date(s) == today
-        and not (
-            s.planned_check_out is not None
-            and s.planned_check_out == today
-            and now_local().hour >= CHECK_OUT_HOUR
-        )
+        if stay_check_in_date(s) == today and not stay_released_by_checkout_time(s)
     ]
     if pending_today:
         return pending_today[0]
     return None
+
+
+def stay_released_by_checkout_time(stay: Stay, now: datetime | None = None) -> bool:
+    """True when planned checkout day has reached 12:00 — room is free for turnover."""
+    now = now or now_local()
+    planned_out = stay.planned_check_out
+    return (
+        planned_out is not None
+        and planned_out == now.date()
+        and now.hour >= CHECK_OUT_HOUR
+    )
 
 
 def stay_should_occupy(stay: Stay, now: datetime | None = None) -> bool:
@@ -115,8 +121,7 @@ def stay_should_occupy(stay: Stay, now: datetime | None = None) -> bool:
     now = now or now_local()
     today = now.date()
 
-    planned_out = stay.planned_check_out
-    if planned_out is not None and planned_out == today and now.hour >= CHECK_OUT_HOUR:
+    if stay_released_by_checkout_time(stay, now):
         # Выезд до 12:00 — после полудня номер свободен под заезд с 13:00.
         return False
 
@@ -151,24 +156,32 @@ def recalculate_room_status(db: Session, room_id: int) -> None:
         else:
             # Future booking — not in the room yet.
             room.status = RoomStatus.booked
-    elif room.status == RoomStatus.occupied:
-        room.status = RoomStatus.cleaning
-    elif room.status == RoomStatus.booked:
-        # Orphan booked status without an open stay.
-        room.status = RoomStatus.free
+    else:
+        open_stays = get_open_stays(db, room_id)
+        auto_freed = any(stay_released_by_checkout_time(s) for s in open_stays)
+        if auto_freed:
+            # Planned checkout reached 12:00 — номер свободен (выезд ещё можно
+            # оформить в журнале позже).
+            room.status = RoomStatus.free
+        elif room.status == RoomStatus.occupied:
+            # Formal checkout / vacated — needs cleaning.
+            room.status = RoomStatus.cleaning
+        elif room.status == RoomStatus.booked:
+            # Orphan booked status without an open stay.
+            room.status = RoomStatus.free
 
     if room.status != previous:
         room.status_updated_at = now_local()
 
 
 def apply_due_checkins(db: Session) -> int:
-    """Promote booked→occupied when check-in time arrives; demote occupied→booked
-    when the only open stay is still a future booking.
+    """Promote booked→occupied at check-in time; free rooms after checkout 12:00;
+    demote occupied→booked when the only open stay is still a future booking.
     """
     changed = 0
     candidates = (
         db.query(Room)
-        .filter(Room.status.in_([RoomStatus.booked, RoomStatus.free, RoomStatus.occupied]))
+        .filter(Room.status.in_([RoomStatus.booked, RoomStatus.free, RoomStatus.occupied, RoomStatus.cleaning]))
         .all()
     )
     for room in candidates:

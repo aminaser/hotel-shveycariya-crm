@@ -7,11 +7,12 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
+from app.core.permissions import ANALYTICS_OWNER_USERNAME
 from app.models.room import Room, RoomStatus
 from app.models.user import User
 from app.schemas.stay import RoomResponse, RoomUpdate
 from app.services.audit import log_activity
-from app.services.room_service import TZ, apply_due_checkins, get_active_stay
+from app.services.room_service import TZ, apply_due_checkins, get_active_stay, stay_should_occupy
 
 
 router = APIRouter(prefix="/rooms", tags=["rooms"])
@@ -92,10 +93,17 @@ def update_room(
         raise HTTPException(status_code=404, detail="Номер не найден")
 
     data = payload.model_dump(exclude_unset=True)
+    if {"price_per_night", "room_type"} & data.keys():
+        if (current_user.username or "").strip().lower() != ANALYTICS_OWNER_USERNAME:
+            raise HTTPException(
+                status_code=403,
+                detail="Цены и тип номера может менять только хозяйка Жибек",
+            )
+
     new_status = data.get("status")
     if new_status is not None and new_status != RoomStatus.occupied:
         active = get_active_stay(db, room_id)
-        if active:
+        if active and stay_should_occupy(active):
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -105,6 +113,7 @@ def update_room(
             )
 
     old_status = room.status.value if hasattr(room.status, "value") else str(room.status)
+    old_price = room.price_per_night
     if "status" in data and data["status"] != room.status:
         room.status_updated_at = datetime.now(TZ)
 
@@ -122,6 +131,17 @@ def update_room(
             entity_label=f"Номер №{room.number}",
             old_value=old_status,
             new_value=new_status_val,
+        )
+    elif "price_per_night" in data or "room_type" in data:
+        log_activity(
+            db,
+            user=current_user,
+            action="Изменила цену/тип номера",
+            entity_type="room",
+            entity_id=room.id,
+            entity_label=f"Номер №{room.number}",
+            old_value=str(old_price) if old_price is not None else None,
+            new_value=str(room.price_per_night) if room.price_per_night is not None else None,
         )
 
     db.commit()

@@ -9,16 +9,18 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
+from app.core.permissions import require_owner
 from app.models.banquet import Banquet
 from app.models.client import Client
 from app.models.stay import Stay, StayType
+from app.models.takeaway_order import TakeawayOrder
 from app.models.user import User
 from app.services.audit import log_activity, set_updated_by
 from app.services.room_service import recalculate_room_status, validate_stay_for_room
 
 router = APIRouter(prefix="/trash", tags=["trash"])
 
-TrashType = Literal["stay", "client", "banquet"]
+TrashType = Literal["stay", "client", "banquet", "takeaway"]
 
 
 class TrashItem(BaseModel):
@@ -92,6 +94,18 @@ def list_trash(
                 title=f"Банкет: {banquet.guest_name}",
                 subtitle=subtitle,
                 deleted_at=banquet.deleted_at,
+            )
+        )
+
+    takeaways = db.query(TakeawayOrder).filter(TakeawayOrder.deleted_at.isnot(None)).all()
+    for order in takeaways:
+        items.append(
+            TrashItem(
+                type="takeaway",
+                id=order.id,
+                title=f"На вынос: {order.guest_name}",
+                subtitle=_fmt(order.order_date),
+                deleted_at=order.deleted_at,
             )
         )
 
@@ -179,42 +193,73 @@ def restore_item(
             deleted_at=deleted_at,
         )
 
-    banquet = (
-        db.query(Banquet)
-        .filter(Banquet.id == payload.id, Banquet.deleted_at.isnot(None))
-        .first()
-    )
-    if not banquet:
-        raise HTTPException(status_code=404, detail="Бронирование не найдено в корзине")
-    deleted_at = banquet.deleted_at
-    banquet.deleted_at = None
-    set_updated_by(banquet, current_user)
-    log_activity(
-        db,
-        user=current_user,
-        action="Восстановила банкет из корзины",
-        entity_type="banquet",
-        entity_id=banquet.id,
-        entity_label=banquet.guest_name,
-    )
-    db.commit()
-    return TrashItem(
-        type="banquet",
-        id=banquet.id,
-        title=f"Банкет: {banquet.guest_name}",
-        deleted_at=deleted_at,
-    )
+    if payload.type == "banquet":
+        banquet = (
+            db.query(Banquet)
+            .filter(Banquet.id == payload.id, Banquet.deleted_at.isnot(None))
+            .first()
+        )
+        if not banquet:
+            raise HTTPException(status_code=404, detail="Бронирование не найдено в корзине")
+        deleted_at = banquet.deleted_at
+        banquet.deleted_at = None
+        set_updated_by(banquet, current_user)
+        log_activity(
+            db,
+            user=current_user,
+            action="Восстановила банкет из корзины",
+            entity_type="banquet",
+            entity_id=banquet.id,
+            entity_label=banquet.guest_name,
+        )
+        db.commit()
+        return TrashItem(
+            type="banquet",
+            id=banquet.id,
+            title=f"Банкет: {banquet.guest_name}",
+            deleted_at=deleted_at,
+        )
+
+    if payload.type == "takeaway":
+        order = (
+            db.query(TakeawayOrder)
+            .filter(TakeawayOrder.id == payload.id, TakeawayOrder.deleted_at.isnot(None))
+            .first()
+        )
+        if not order:
+            raise HTTPException(status_code=404, detail="Заказ не найден в корзине")
+        deleted_at = order.deleted_at
+        order.deleted_at = None
+        set_updated_by(order, current_user)
+        log_activity(
+            db,
+            user=current_user,
+            action="Восстановила заказ на вынос из корзины",
+            entity_type="takeaway_order",
+            entity_id=order.id,
+            entity_label=order.guest_name,
+        )
+        db.commit()
+        return TrashItem(
+            type="takeaway",
+            id=order.id,
+            title=f"На вынос: {order.guest_name}",
+            deleted_at=deleted_at,
+        )
+
+    raise HTTPException(status_code=400, detail="Неизвестный тип записи")
 
 
 @router.delete("/clear", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 def clear_trash(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_owner),
 ) -> Response:
     """Permanently remove all soft-deleted CRM records (entire trash)."""
     stays = db.query(Stay).filter(Stay.deleted_at.isnot(None)).all()
     clients = db.query(Client).filter(Client.deleted_at.isnot(None)).all()
     banquets = db.query(Banquet).filter(Banquet.deleted_at.isnot(None)).all()
+    takeaways = db.query(TakeawayOrder).filter(TakeawayOrder.deleted_at.isnot(None)).all()
 
     # Delete stays first so client FK references do not block hard-delete.
     for stay in stays:
@@ -231,7 +276,10 @@ def clear_trash(
     for banquet in banquets:
         db.delete(banquet)
 
-    count = len(stays) + len(clients) + len(banquets)
+    for order in takeaways:
+        db.delete(order)
+
+    count = len(stays) + len(clients) + len(banquets) + len(takeaways)
     log_activity(
         db,
         user=current_user,

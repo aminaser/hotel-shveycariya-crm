@@ -113,7 +113,9 @@ export function groupStays(stays: Stay[]): StayGroup[] {
     const payPrimary = pickPaymentPrimaryStay(members);
     const totalAmount =
       primary.stay_type === "alumni"
-        ? parseFloat(alumniPackageAmount(primary.people_count ?? 1)) || 0
+        ? parseFloat(payPrimary.payment_amount) ||
+          parseFloat(alumniPackageAmount(primary.people_count ?? 1)) ||
+          0
         : members.reduce(
             (sum, s) => sum + (parseFloat(s.payment_amount) || 0),
             0,

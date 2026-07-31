@@ -21,6 +21,7 @@ import { RoomsPage } from "@/pages/RoomsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { SetupPage } from "@/pages/SetupPage";
 import { SpaJournalPage } from "@/pages/SpaJournalPage";
+import { TakeawayOrdersPage } from "@/pages/TakeawayOrdersPage";
 import { TimesheetPage } from "@/pages/TimesheetPage";
 import { TrashPage } from "@/pages/TrashPage";
 
@@ -89,6 +90,7 @@ export default function App() {
           <Route path="/spa" element={<SpaJournalPage />} />
           <Route path="/spa-journal" element={<Navigate to="/spa" replace />} />
           <Route path="/banquets" element={<BanquetsPage />} />
+          <Route path="/takeaway" element={<TakeawayOrdersPage />} />
           <Route path="/calendar" element={<CalendarPage />} />
           <Route
             path="/analytics"

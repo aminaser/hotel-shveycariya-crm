@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Copy, Pencil } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { apiFetch, ApiError } from "@/api/client";
@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -26,7 +27,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { nightsBetween, stayAmountFromRate, todayLocal, ALUMNI_PRICE_PER_PERSON, ALUMNI_PACKAGE_INCLUDES, alumniPackageAmount } from "@/lib/dates";
+import {
+  nightsBetween,
+  stayAmountFromRate,
+  todayLocal,
+  ALUMNI_PRICE_PER_PERSON,
+  ALUMNI_PACKAGE_INCLUDES,
+  alumniPackageAmount,
+} from "@/lib/dates";
 import { groupStays, newGroupId, pickPaymentPrimaryStay, pickPaymentWriteTarget, staysInLogicalGroup } from "@/lib/stay-groups";
 import {
   copyToClipboard,
@@ -43,7 +51,11 @@ import {
   splitPaymentMethod,
 } from "@/lib/payment-method";
 import { cn } from "@/lib/utils";
+import { canManagePrices, useAuthStore } from "@/stores/auth";
 
+interface AlumniPrices {
+  price_per_person: number;
+}
 type Filter = "all" | "today" | "week" | "unpaid" | "active" | "checkout_today";
 type PaymentFilter = "all" | "cash" | "kaspi" | "halyk" | "other";
 
@@ -75,7 +87,11 @@ type PayForm = {
   payment_date: string;
 };
 
-const emptyPayForm = (stay?: Stay | null, group: Stay[] = []): PayForm => {
+const emptyPayForm = (
+  stay?: Stay | null,
+  group: Stay[] = [],
+  alumniPrice: number = ALUMNI_PRICE_PER_PERSON,
+): PayForm => {
   const members = group.length > 0 ? group : stay ? [stay] : [];
   const primary = stay ?? members[0] ?? null;
   const { preset, customText } = splitPaymentMethod(
@@ -94,7 +110,7 @@ const emptyPayForm = (stay?: Stay | null, group: Stay[] = []): PayForm => {
       : totalPrepay;
   const packageOrSum =
     primary?.stay_type === "alumni"
-      ? alumniPackageAmount(primary.people_count ?? 1)
+      ? alumniPackageAmount(primary.people_count ?? 1, alumniPrice)
       : String(
           Math.round(
             members.reduce(
@@ -123,6 +139,8 @@ function mutationError(error: unknown, fallback: string) {
 
 export function RegistryPage() {
   const queryClient = useQueryClient();
+  const user = useAuthStore((s) => s.user);
+  const canEditPrices = canManagePrices(user);
   const [filter, setFilter] = useState<Filter>("all");
   const [paymentFilter, setPaymentFilter] = useState<PaymentFilter>("all");
   const [search, setSearch] = useState("");
@@ -131,6 +149,8 @@ export function RegistryPage() {
   const [authorId, setAuthorId] = useState<number | null>(null);
   const [selectedClientId, setSelectedClientId] = useState<number | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [alumniPriceOpen, setAlumniPriceOpen] = useState(false);
+  const [alumniPriceDraft, setAlumniPriceDraft] = useState(String(ALUMNI_PRICE_PER_PERSON));
   const [editStay, setEditStay] = useState<Stay | null>(null);
   /** room_id → stay for the group being edited (to add/remove rooms). */
   const [editOriginalByRoom, setEditOriginalByRoom] = useState<Map<string, Stay>>(
@@ -176,10 +196,10 @@ export function RegistryPage() {
       check_in: stay.check_in ?? stay.record_date,
       planned_check_out: stay.planned_check_out ?? "",
       people_count: String(peopleCount),
-      // Alumni package is always people × 25 000, never sum of room rows.
+      // Alumni package is always people × rate, never sum of room rows.
       payment_amount:
         stay.stay_type === "alumni"
-          ? alumniPackageAmount(peopleCount)
+          ? alumniPackageAmount(peopleCount, alumniPrice)
           : totalAmount > 0
             ? String(Math.round(totalAmount))
             : stay.payment_amount,
@@ -201,7 +221,7 @@ export function RegistryPage() {
   const openPay = (stay: Stay) => {
     const group = staysInLogicalGroup(stay, stays);
     setPayStay(stay);
-    setPayForm(emptyPayForm(stay, group));
+    setPayForm(emptyPayForm(stay, group, alumniPrice));
   };
 
   const openCheckout = (stay: Stay) => {
@@ -245,6 +265,35 @@ export function RegistryPage() {
     queryFn: () => apiFetch<Room[]>("/rooms"),
   });
 
+  const { data: alumniPrices } = useQuery({
+    queryKey: ["alumni-prices"],
+    queryFn: () => apiFetch<AlumniPrices>("/alumni-prices"),
+    staleTime: 30_000,
+  });
+  const alumniPrice = alumniPrices?.price_per_person ?? ALUMNI_PRICE_PER_PERSON;
+  const alumniAmount = (people: number) => alumniPackageAmount(people, alumniPrice);
+
+  useEffect(() => {
+    if (!alumniPriceOpen) return;
+    setAlumniPriceDraft(String(Math.round(alumniPrice)));
+  }, [alumniPriceOpen, alumniPrice]);
+
+  const saveAlumniPrice = useMutation({
+    mutationFn: () =>
+      apiFetch<AlumniPrices>("/alumni-prices", {
+        method: "PUT",
+        body: JSON.stringify({
+          price_per_person: Math.max(0, Number(alumniPriceDraft) || 0),
+        }),
+      }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["alumni-prices"], data);
+      toast.success("Цена встречи выпускников сохранена");
+      setAlumniPriceOpen(false);
+    },
+    onError: (e) => mutationError(e, "Не удалось сохранить цену"),
+  });
+
   const amountForRoom = (
     roomId: string,
     checkIn: string,
@@ -276,7 +325,7 @@ export function RegistryPage() {
     if (next.stay_type === "alumni") {
       return {
         ...next,
-        payment_amount: alumniPackageAmount(parseInt(next.people_count, 10) || 1),
+        payment_amount: alumniAmount(parseInt(next.people_count, 10) || 1),
       };
     }
     if (roomIds.length === 0) return { ...next, payment_amount: "" };
@@ -293,7 +342,7 @@ export function RegistryPage() {
     if (stay_type === "alumni") {
       setForm({
         ...next,
-        payment_amount: alumniPackageAmount(parseInt(people_count, 10) || 1),
+        payment_amount: alumniAmount(parseInt(people_count, 10) || 1),
       });
       return;
     }
@@ -308,7 +357,7 @@ export function RegistryPage() {
     const next = { ...form, people_count };
     if (form.stay_type === "alumni") {
       const n = parseInt(people_count, 10) || 1;
-      setForm({ ...next, payment_amount: alumniPackageAmount(n) });
+      setForm({ ...next, payment_amount: alumniAmount(n) });
       return;
     }
     setForm(next);
@@ -448,7 +497,7 @@ export function RegistryPage() {
           : 1;
       const packageTotal =
         form.stay_type === "alumni"
-          ? alumniPackageAmount(people)
+          ? alumniAmount(people)
           : null;
       const multi = roomIds.length > 1;
       const groupId = multi ? newGroupId() : null;
@@ -592,7 +641,7 @@ export function RegistryPage() {
             : existing.payment_amount;
 
         if (snap.stay_type === "alumni") {
-          paymentAmount = isPrimary ? alumniPackageAmount(people) : "0";
+          paymentAmount = isPrimary ? alumniAmount(people) : "0";
           if (!isPrimary) paymentStatus = "unpaid";
         } else if (multi && snap.payment_status === "partial" && !isPrimary) {
           paymentStatus = "unpaid";
@@ -790,7 +839,7 @@ export function RegistryPage() {
       );
       const packageTotal =
         payStay.stay_type === "alumni"
-          ? alumniPackageAmount(payStay.people_count ?? 1)
+          ? alumniAmount(payStay.people_count ?? 1)
           : null;
       const multi = group.length > 1;
       const groupId =
@@ -892,7 +941,13 @@ export function RegistryPage() {
           <h1 className="text-2xl font-bold">Журнал заселений</h1>
           <p className="text-sm text-muted-foreground">Основной рабочий экран</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {canEditPrices && (
+            <Button variant="outline" onClick={() => setAlumniPriceOpen(true)}>
+              <Pencil className="h-4 w-4" />
+              Цена выпускников
+            </Button>
+          )}
           <Button variant="outline" onClick={exportCsv}>
             Экспорт CSV
           </Button>
@@ -1056,9 +1111,14 @@ export function RegistryPage() {
                         Бронь
                       </Badge>
                     )}
-                    {group.anyCheckoutToday && (
+                    {group.anyCheckoutToday && group.anyInRoom && (
                       <Badge variant="default" className="mt-1 text-[10px]">
                         Выезд сегодня
+                      </Badge>
+                    )}
+                    {group.anyCheckoutToday && !group.anyInRoom && !group.allCheckedOut && (
+                      <Badge variant="success" className="mt-1 text-[10px]">
+                        Свободен с 12:00
                       </Badge>
                     )}
                     {group.allCheckedOut && (
@@ -1407,10 +1467,10 @@ export function RegistryPage() {
                     onChange={(e) => setPeopleCount(e.target.value)}
                   />
                   <p className="text-xs text-muted-foreground">
-                    {ALUMNI_PRICE_PER_PERSON.toLocaleString("ru-KZ")} ₸ ×{" "}
+                    {alumniPrice.toLocaleString("ru-KZ")} ₸ ×{" "}
                     {Math.max(1, parseInt(form.people_count, 10) || 1)} ={" "}
                     {Number(
-                      alumniPackageAmount(parseInt(form.people_count, 10) || 1),
+                      alumniAmount(parseInt(form.people_count, 10) || 1),
                     ).toLocaleString("ru-KZ")}{" "}
                     ₸
                   </p>
@@ -1484,7 +1544,7 @@ export function RegistryPage() {
                 />
                 {form.stay_type === "alumni" && (
                   <p className="text-xs text-muted-foreground">
-                    Только {ALUMNI_PRICE_PER_PERSON.toLocaleString("ru-KZ")} ₸ ×
+                    Только {alumniPrice.toLocaleString("ru-KZ")} ₸ ×
                     количество человек (номера на сумму не влияют)
                   </p>
                 )}
@@ -1608,7 +1668,7 @@ export function RegistryPage() {
                   ·{" "}
                   {formatMoney(
                     payStay.stay_type === "alumni"
-                      ? alumniPackageAmount(payStay.people_count ?? 1)
+                      ? alumniAmount(payStay.people_count ?? 1)
                       : staysInGroup(payStay).reduce(
                           (sum, s) => sum + (parseFloat(s.payment_amount) || 0),
                           0,
@@ -1778,6 +1838,40 @@ export function RegistryPage() {
               )}
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={alumniPriceOpen} onOpenChange={setAlumniPriceOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Цена встречи выпускников</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Цена за одного человека в пакете. Только для Жибек.
+          </p>
+          <div className="space-y-2 py-2">
+            <Label>Цена за человека, ₸</Label>
+            <Input
+              type="number"
+              min={0}
+              value={alumniPriceDraft}
+              onChange={(e) => setAlumniPriceDraft(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              В пакет входит: {ALUMNI_PACKAGE_INCLUDES}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAlumniPriceOpen(false)}>
+              Отмена
+            </Button>
+            <Button
+              onClick={() => saveAlumniPrice.mutate()}
+              disabled={saveAlumniPrice.isPending}
+            >
+              {saveAlumniPrice.isPending ? "Сохранение…" : "Сохранить"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
