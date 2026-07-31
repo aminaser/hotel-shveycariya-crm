@@ -61,7 +61,8 @@ function stopBackend() {
   }, 800);
 }
 
-/** Kill packaged Electron + Python still holding NSIS install files (Windows). */
+/** Kill packaged app + Python holding NSIS install files (Windows).
+ *  Must NOT match Setup exe names like Hotel-Shveycariya-CRM-Setup-*.exe. */
 function killPackagedPythonLocks() {
   if (process.platform !== "win32" || isDev) return;
   try {
@@ -82,16 +83,12 @@ function killPackagedPythonLocks() {
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        `$needles = @('HotelShveycariyaCRM','hotel-shveycariya-crm','Hotel Shveycariya CRM','Shveycariya');
-Get-CimInstance Win32_Process -EA SilentlyContinue | ForEach-Object {
-  $p = $_; $blob = (($p.ExecutablePath + ' ' + $p.CommandLine) + '');
-  foreach ($n in $needles) {
-    if ($blob -like ('*' + $n + '*')) {
-      if ($p.ProcessId -ne $PID) {
-        Stop-Process -Id $p.ProcessId -Force -EA SilentlyContinue
-      }
-      break
-    }
+        `Get-CimInstance Win32_Process -EA SilentlyContinue | ForEach-Object {
+  $p = $_; $name = $p.Name; $path = '' + $p.ExecutablePath; $cmd = '' + $p.CommandLine;
+  if ($name -eq 'HotelShveycariyaCRM.exe') {
+    if ($p.ProcessId -ne $PID) { Stop-Process -Id $p.ProcessId -Force -EA SilentlyContinue }
+  } elseif ($name -match '^python(w)?\\.exe$' -and ($path -match '\\\\HotelShveycariyaCRM\\\\' -or $cmd -match 'HotelShveycariyaCRM')) {
+    Stop-Process -Id $p.ProcessId -Force -EA SilentlyContinue
   }
 }`,
       ],
@@ -375,34 +372,24 @@ function setupAutoUpdater() {
         clearInterval(updateCheckTimer);
         updateCheckTimer = null;
       }
-      try {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.removeAllListeners("close");
-          mainWindow.close();
-        }
-      } catch {
-        // ignore
-      }
+      // quitAndInstall owns process exit — do not close the window first
+      // (window-all-closed → app.quit races and skips the Setup spawn).
+      autoUpdater.autoInstallOnAppQuit = false;
       stopBackend();
       killPackagedPythonLocks();
-      // Give Windows time to release locks on portable CPython under resources\
-      // before NSIS runs (otherwise CopyFiles / old uninstall hit Retry loops).
-      void (async () => {
-        await waitMs(3000);
+      setTimeout(() => {
         killPackagedPythonLocks();
-        await waitMs(1000);
         try {
-          // Silent NSIS (/S) + relaunch — avoids interactive "close CRM" UI.
           autoUpdater.quitAndInstall(true, true);
         } catch (error) {
           isInstallingUpdate = false;
           console.error("[updater] quitAndInstall failed:", error);
           dialog.showErrorBox(
             "Обновление",
-            `Не удалось запустить установку.\n\n${error.message || error}\n\nЗакройте CRM через Диспетчер задач (HotelShveycariyaCRM.exe и python.exe) и установите Setup с GitHub Releases.`,
+            `Не удалось запустить установку.\n\n${error.message || error}\n\nСкачайте Setup вручную:\nhttps://github.com/aminaser/hotel-shveycariya-crm/releases/latest`,
           );
         }
-      })();
+      }, 2000);
     }
   });
 
@@ -441,6 +428,9 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
+  // During quitAndInstall the window may close first; do not app.quit() here or
+  // the updater never gets to spawn the NSIS Setup.
+  if (isInstallingUpdate) return;
   if (process.platform !== "darwin") app.quit();
 });
 
@@ -449,7 +439,10 @@ app.on("before-quit", () => {
     clearInterval(updateCheckTimer);
     updateCheckTimer = null;
   }
-  stopBackend();
+  // Keep backend briefly if updater is about to spawn Setup; Setup kills it.
+  if (!isInstallingUpdate) {
+    stopBackend();
+  }
 });
 
 app.on("activate", async () => {
