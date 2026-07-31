@@ -1,6 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog } = require("electron");
 const { autoUpdater } = require("electron-updater");
-const { spawn } = require("child_process");
+const { spawn, execFile } = require("child_process");
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
@@ -11,6 +11,8 @@ let backendProcess = null;
 let mainWindow = null;
 let updateCheckTimer = null;
 let backendLog = "";
+/** Skip close-backup and force-kill backend while NSIS update is installing. */
+let isInstallingUpdate = false;
 
 app.setName("Отель Швейцария CRM");
 
@@ -18,6 +20,45 @@ function appendBackendLog(chunk) {
   const text = chunk.toString();
   backendLog = (backendLog + text).slice(-8000);
   console.error("[backend]", text);
+}
+
+function stopBackend() {
+  if (!backendProcess) return;
+  const proc = backendProcess;
+  const pid = proc.pid;
+  backendProcess = null;
+
+  if (process.platform === "win32" && pid) {
+    // Kill the whole tree — plain kill() leaves python/uvicorn holding install files.
+    try {
+      execFile(
+        "taskkill",
+        ["/pid", String(pid), "/T", "/F"],
+        { windowsHide: true },
+        () => {},
+      );
+    } catch {
+      try {
+        proc.kill();
+      } catch {
+        // ignore
+      }
+    }
+    return;
+  }
+
+  try {
+    proc.kill("SIGTERM");
+  } catch {
+    // ignore
+  }
+  setTimeout(() => {
+    try {
+      proc.kill("SIGKILL");
+    } catch {
+      // ignore
+    }
+  }, 800);
 }
 
 function getBackendDir() {
@@ -204,6 +245,11 @@ async function createWindow() {
   }
 
   mainWindow.on("close", async (event) => {
+    if (isInstallingUpdate) {
+      mainWindow.destroy();
+      mainWindow = null;
+      return;
+    }
     event.preventDefault();
     try {
       const token = await mainWindow.webContents.executeJavaScript(
@@ -264,14 +310,33 @@ function setupAutoUpdater() {
       title: "Обновление готово",
       message: `Скачана версия ${info.version}`,
       detail:
-        "Перезапустите приложение, чтобы установить обновление. Данные CRM (база в AppData) сохранятся.",
-      buttons: ["Перезапустить сейчас", "Позже"],
+        "Приложение закроется и установит обновление само. Данные CRM (база в AppData) сохранятся.",
+      buttons: ["Установить сейчас", "Позже"],
       defaultId: 0,
       cancelId: 1,
       noLink: true,
     });
     if (response === 0) {
-      autoUpdater.quitAndInstall(false, true);
+      isInstallingUpdate = true;
+      if (updateCheckTimer) {
+        clearInterval(updateCheckTimer);
+        updateCheckTimer = null;
+      }
+      stopBackend();
+      // Let Windows release file locks on python/runtime before NSIS runs.
+      setTimeout(() => {
+        try {
+          // Silent NSIS (/S) + relaunch — avoids the Setup UI that asks to close CRM.
+          autoUpdater.quitAndInstall(true, true);
+        } catch (error) {
+          isInstallingUpdate = false;
+          console.error("[updater] quitAndInstall failed:", error);
+          dialog.showErrorBox(
+            "Обновление",
+            `Не удалось запустить установку.\n\n${error.message || error}\n\nЗакройте CRM полностью и установите Setup с GitHub Releases.`,
+          );
+        }
+      }, 700);
     }
   });
 
@@ -304,10 +369,7 @@ app.whenReady().then(async () => {
       "Отель Швейцария CRM",
       `Не удалось запустить приложение.\n\n${error.message || error}`,
     );
-    if (backendProcess) {
-      backendProcess.kill();
-      backendProcess = null;
-    }
+    stopBackend();
     app.quit();
   }
 });
@@ -321,10 +383,7 @@ app.on("before-quit", () => {
     clearInterval(updateCheckTimer);
     updateCheckTimer = null;
   }
-  if (backendProcess) {
-    backendProcess.kill();
-    backendProcess = null;
-  }
+  stopBackend();
 });
 
 app.on("activate", async () => {
