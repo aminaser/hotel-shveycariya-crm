@@ -1,6 +1,6 @@
 {
   "name": "hotel-shveycariya-crm",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": true,
   "description": "CRM для отеля Швейцария, Текели",
   "main": "electron/main.cjs",
@@ -21,7 +21,7 @@
   },
   "build": {
     "appId": "kz.tekeli.hotel.shveycariya.crm",
-    "productName": "Hotel Shveycariya CRM",
+    "productName": "HotelShveycariyaCRM",
     "publish": [
       {
         "provider": "github",
@@ -62,6 +62,7 @@
     },
     "win": {
       "executableName": "HotelShveycariyaCRM",
+      "artifactName": "Hotel-Shveycariya-CRM-${version}.${ext}",
       "target": [
         {
           "target": "nsis",
@@ -78,12 +79,18 @@
       ]
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
       "language": "1049",
       "shortcutName": "Отель Швейцария CRM",
       "uninstallDisplayName": "Отель Швейцария CRM",
-      "include": "build/installer.nsh"
+      "artifactName": "Hotel-Shveycariya-CRM-Setup-${version}.${ext}",
+      "include": "build/installer.nsh",
+      "deleteAppDataOnUninstall": false
+    },
+    "portable": {
+      "artifactName": "Hotel-Shveycariya-CRM-Portable-${version}.${ext}"
     },
     "afterPack": "./scripts/afterPack.cjs"
   },
