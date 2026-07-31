@@ -51,4 +51,11 @@ def seed_users(db: Session) -> None:
                 # Always sync role/name for known accounts so installs stay consistent.
                 user.full_name = item["full_name"]
                 user.role = item["role"]
+
+    # Analytics / owner tools: only zhibek may be owner. Demote stray owners.
+    for user in db.query(User).all():
+        if user.username == "zhibek":
+            user.role = UserRole.owner.value
+        elif user.role == UserRole.owner.value:
+            user.role = UserRole.admin.value
     db.commit()

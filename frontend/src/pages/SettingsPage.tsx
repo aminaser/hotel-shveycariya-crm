@@ -2,13 +2,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
 
-import { apiFetch, ApiError } from "@/api/client";
+import { apiFetch, ApiError, apiUrl } from "@/api/client";
 import type { AppSettings } from "@/api/types";
 import { type AuthUser, useAuthStore } from "@/stores/auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PasswordInput } from "@/components/ui/password-input";
 
 export function SettingsPage() {
   const queryClient = useQueryClient();
@@ -21,6 +22,7 @@ export function SettingsPage() {
   });
   const [resetUserId, setResetUserId] = useState<number | "">("");
   const [resetPassword, setResetPassword] = useState("");
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
 
   const { data: settings } = useQuery({
     queryKey: ["settings"],
@@ -112,7 +114,7 @@ export function SettingsPage() {
       const formData = new FormData();
       formData.append("file", file);
       const token = useAuthStore.getState().token;
-      const response = await fetch("/api/v1/settings/restore", {
+      const response = await fetch(apiUrl("/settings/restore"), {
         method: "POST",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: formData,
@@ -250,20 +252,17 @@ export function SettingsPage() {
           <CardTitle>Смена пароля</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <Input
-            type="password"
+          <PasswordInput
             placeholder="Текущий пароль"
             value={passwords.current}
             onChange={(e) => setPasswords({ ...passwords, current: e.target.value })}
           />
-          <Input
-            type="password"
+          <PasswordInput
             placeholder="Новый пароль"
             value={passwords.next}
             onChange={(e) => setPasswords({ ...passwords, next: e.target.value })}
           />
-          <Input
-            type="password"
+          <PasswordInput
             placeholder="Подтверждение"
             value={passwords.confirm}
             onChange={(e) => setPasswords({ ...passwords, confirm: e.target.value })}
@@ -321,8 +320,7 @@ export function SettingsPage() {
                   ))}
               </select>
             </div>
-            <Input
-              type="password"
+            <PasswordInput
               placeholder="Новый пароль"
               value={resetPassword}
               onChange={(e) => setResetPassword(e.target.value)}
@@ -334,6 +332,49 @@ export function SettingsPage() {
               onClick={() => resetOtherPassword.mutate()}
             >
               Установить пароль
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {window.electronAPI?.isElectron && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Обновления</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              При запуске приложение само проверяет GitHub Releases. Если вышла
+              новая версия — скачает её в фоне и предложит перезапуск. Данные CRM
+              при этом не трогаются.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={checkingUpdates}
+              onClick={async () => {
+                setCheckingUpdates(true);
+                try {
+                  const result = await window.electronAPI?.checkForUpdates();
+                  if (!result?.ok) {
+                    toast.error(
+                      result?.reason === "updates_unavailable"
+                        ? "Автообновление недоступно в этой сборке"
+                        : "Не удалось проверить обновления",
+                    );
+                    return;
+                  }
+                  toast.success(
+                    result.version
+                      ? `Проверка выполнена (доступна ${result.version})`
+                      : "Проверка обновлений запущена",
+                  );
+                } finally {
+                  setCheckingUpdates(false);
+                }
+              }}
+            >
+              {checkingUpdates ? "Проверка…" : "Проверить обновления"}
             </Button>
           </CardContent>
         </Card>

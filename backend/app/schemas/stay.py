@@ -46,9 +46,13 @@ class StayBase(BaseModel):
     stay_type: StayType
     check_in: date | None = None
     planned_check_out: date | None = None
+    people_count: int = Field(default=1, ge=1, le=500)
     payment_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    prepayment: Decimal = Field(default=Decimal("0"), ge=0)
     payment_status: PaymentStatus = PaymentStatus.unpaid
     payment_method: str | None = Field(default=None, max_length=64)
+    payment_date: date | None = None
+    group_id: str | None = Field(default=None, max_length=36)
     notes: str | None = None
 
 
@@ -63,10 +67,19 @@ class StayUpdate(BaseModel):
     stay_type: StayType | None = None
     check_in: date | None = None
     planned_check_out: date | None = None
+    check_out: date | None = None
+    people_count: int | None = Field(default=None, ge=1, le=500)
     payment_amount: Decimal | None = Field(default=None, ge=0)
+    prepayment: Decimal | None = Field(default=None, ge=0)
     payment_status: PaymentStatus | None = None
     payment_method: str | None = Field(default=None, max_length=64)
+    payment_date: date | None = None
+    group_id: str | None = Field(default=None, max_length=36)
     notes: str | None = None
+
+
+class CheckoutRequest(BaseModel):
+    check_out: date | None = None
 
 
 class StayResponse(BaseModel):
@@ -78,14 +91,19 @@ class StayResponse(BaseModel):
     check_in: date | None
     planned_check_out: date | None
     check_out: date | None
+    people_count: int = 1
     payment_amount: Decimal
+    prepayment: Decimal = Decimal("0")
     payment_status: PaymentStatus
     payment_method: str | None
+    payment_date: date | None = None
+    group_id: str | None = None
     notes: str | None
     created_at: datetime
     updated_at: datetime
     client_name: str
     client_phone: str | None
+    client_iin: str | None = None
     room_number: str
     created_by_user_id: int | None = None
     created_by_name: str | None = None

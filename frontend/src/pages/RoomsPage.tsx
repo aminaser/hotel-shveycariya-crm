@@ -78,6 +78,7 @@ function roomSortKey(room: Room): number {
 interface CheckInForm {
   guestName: string;
   phone: string;
+  iin: string;
   checkInAt: string; // datetime-local
 }
 
@@ -87,6 +88,7 @@ export function RoomsPage() {
   const [form, setForm] = useState<CheckInForm>({
     guestName: "",
     phone: "",
+    iin: "",
     checkInAt: nowLocalInputValue(),
   });
 
@@ -132,6 +134,7 @@ export function RoomsPage() {
         body: JSON.stringify({
           full_name: name,
           phone: form.phone.trim() || null,
+          iin: form.iin.trim() || null,
         }),
       });
 
@@ -169,7 +172,7 @@ export function RoomsPage() {
     if (status === room.status) return;
     // Walk-in check-in: no guest linked yet → open form.
     if (status === "occupied" && !room.current_guest) {
-      setForm({ guestName: "", phone: "", checkInAt: nowLocalInputValue() });
+      setForm({ guestName: "", phone: "", iin: "", checkInAt: nowLocalInputValue() });
       setCheckInRoom(room);
       return;
     }
@@ -198,7 +201,7 @@ export function RoomsPage() {
         <div>
           <h1 className="text-2xl font-bold">Номера</h1>
           <p className="text-sm text-muted-foreground">
-            Расценки за сутки · завтрак включён · сутки до 12:00
+            Расценки за сутки · завтрак включён · выезд до 12:00 · заезд с 13:00
           </p>
         </div>
         <div className="flex gap-2 text-sm">
@@ -267,7 +270,7 @@ export function RoomsPage() {
                             {room.check_in ? formatDate(room.check_in) : "—"}
                           </span>
                           {room.status === "booked" ? (
-                            <span className="text-muted-foreground"> · авто после 14:00</span>
+                            <span className="text-muted-foreground"> · авто после 13:00</span>
                           ) : (
                             <>
                               {" · "}
@@ -342,6 +345,21 @@ export function RoomsPage() {
                 value={form.phone}
                 onChange={(e) => setForm((p) => ({ ...p, phone: e.target.value }))}
                 placeholder="+7…"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>ИИН (12 цифр)</Label>
+              <Input
+                value={form.iin}
+                onChange={(e) =>
+                  setForm((p) => ({
+                    ...p,
+                    iin: e.target.value.replace(/\D/g, "").slice(0, 12),
+                  }))
+                }
+                placeholder="000000000000"
+                maxLength={12}
+                inputMode="numeric"
               />
             </div>
             <div className="space-y-2">

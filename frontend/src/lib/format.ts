@@ -22,6 +22,7 @@ export function formatMoney(value: number | string): string {
 export const stayTypeLabel: Record<string, string> = {
   booking: "Бронь",
   extension: "Продление",
+  alumni: "Встреча выпускников",
 };
 
 export const paymentStatusLabel: Record<string, string> = {

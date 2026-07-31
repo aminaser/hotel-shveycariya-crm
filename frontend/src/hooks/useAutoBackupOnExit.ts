@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { apiFetch } from "@/api/client";
+import { apiFetch, apiUrl } from "@/api/client";
 import type { AppSettings } from "@/api/types";
 import { useAuthStore } from "@/stores/auth";
 
@@ -18,7 +18,7 @@ export function useAutoBackupOnExit() {
     if (!token || !settings?.auto_backup_on_exit) return;
 
     const onExit = () => {
-      fetch("/api/v1/settings/backup", {
+      fetch(apiUrl("/settings/backup"), {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,

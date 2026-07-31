@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.room import Room
 
-# Расценки на гостиничные номера. Завтрак включён. Сутки до 12:00.
+# Расценки на гостиничные номера. Завтрак включён. Выезд до 12:00, заезд с 13:00.
 ROOM_RATES: dict[str, tuple[Decimal, str]] = {
     "1": (Decimal("11000"), "одноместный"),
     "2": (Decimal("8000"), "одноместный"),
@@ -23,7 +23,7 @@ ROOM_RATES: dict[str, tuple[Decimal, str]] = {
     "15": (Decimal("10000"), "одноместный"),
 }
 
-ROOM_POLICY_NOTE = "Завтрак включен. Сутки до 12:00."
+ROOM_POLICY_NOTE = "Завтрак включен. Выезд до 12:00, заезд с 13:00."
 
 
 def seed_room_rates(db: Session) -> None:

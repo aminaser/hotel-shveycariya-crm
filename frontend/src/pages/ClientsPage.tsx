@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { apiFetch, ApiError } from "@/api/client";
@@ -26,6 +26,7 @@ import {
 
 export function ClientsPage() {
   const queryClient = useQueryClient();
+  const dedupedRef = useRef(false);
   const [search, setSearch] = useState("");
   const [authorId, setAuthorId] = useState<number | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -51,22 +52,51 @@ export function ClientsPage() {
     },
   });
 
+  const dedupeClients = useMutation({
+    mutationFn: () =>
+      apiFetch<{ merged_groups: number; removed: number }>("/clients/dedupe", {
+        method: "POST",
+      }),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["clients"] });
+      queryClient.invalidateQueries({ queryKey: ["stays"] });
+      queryClient.invalidateQueries({ queryKey: ["rooms"] });
+      if (result.removed > 0) {
+        toast.success(
+          `Объединены дубликаты: убрано ${result.removed}, групп ${result.merged_groups}`,
+        );
+      }
+    },
+    onError: (error) => {
+      if (error instanceof ApiError) toast.error(error.message);
+      else toast.error("Не удалось объединить дубликаты");
+    },
+  });
+
+  useEffect(() => {
+    if (dedupedRef.current) return;
+    dedupedRef.current = true;
+    dedupeClients.mutate();
+    // Run once on open to clean existing duplicates (Ольга×2, Евгения×3, …).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const createClient = useMutation({
     mutationFn: () =>
       apiFetch("/clients", {
         method: "POST",
         body: JSON.stringify({
-          full_name: form.full_name,
-          phone: form.phone || null,
+          full_name: form.full_name.trim(),
+          phone: form.phone.trim() || null,
           client_type: form.client_type,
           iin: form.client_type === "individual" ? form.iin || null : null,
           bin: form.client_type === "organization" ? form.bin || null : null,
           age: form.age ? parseInt(form.age, 10) : null,
-          document_number: form.document_number || null,
+          document_number: form.document_number.trim() || null,
         }),
       }),
     onSuccess: () => {
-      toast.success("Клиент добавлен");
+      toast.success("Клиент сохранён");
       setOpen(false);
       setForm({
         full_name: "",
@@ -102,10 +132,19 @@ export function ClientsPage() {
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Клиентская база</h1>
-          <p className="text-sm text-muted-foreground">Поиск по ФИО, телефону, ИИН</p>
+          <p className="text-sm text-muted-foreground">
+            Один человек — одна карточка, даже если занято несколько номеров
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <AuthorFilter value={authorId} onChange={setAuthorId} />
+          <Button
+            variant="outline"
+            onClick={() => dedupeClients.mutate()}
+            disabled={dedupeClients.isPending}
+          >
+            {dedupeClients.isPending ? "Объединение…" : "Объединить дубликаты"}
+          </Button>
           <Button onClick={() => setOpen(true)}>+ Добавить клиента</Button>
         </div>
       </div>
@@ -164,16 +203,25 @@ export function ClientsPage() {
                   <td className="px-4 py-3">{client.iin ?? client.bin ?? "—"}</td>
                   <td className="px-4 py-3">{client.age ?? "—"}</td>
                   <td className="px-4 py-3">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-destructive"
-                      onClick={() => {
-                        if (confirm("Удалить клиента?")) deleteClient.mutate(client.id);
-                      }}
-                    >
-                      Удалить
-                    </Button>
+                    <div className="flex flex-wrap items-center justify-end gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setSelectedId(client.id)}
+                      >
+                        Редактировать
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-destructive"
+                        onClick={() => {
+                          if (confirm("Удалить клиента?")) deleteClient.mutate(client.id);
+                        }}
+                      >
+                        Удалить
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))
@@ -236,10 +284,27 @@ export function ClientsPage() {
                 maxLength={12}
               />
             </div>
+            <div className="space-y-2">
+              <Label>Возраст</Label>
+              <Input
+                type="number"
+                min={0}
+                max={150}
+                value={form.age}
+                onChange={(e) => setForm({ ...form, age: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Документ</Label>
+              <Input
+                value={form.document_number}
+                onChange={(e) => setForm({ ...form, document_number: e.target.value })}
+              />
+            </div>
             <Button
               className="w-full"
               onClick={() => createClient.mutate()}
-              disabled={!form.full_name || createClient.isPending}
+              disabled={!form.full_name.trim() || createClient.isPending}
             >
               Сохранить
             </Button>

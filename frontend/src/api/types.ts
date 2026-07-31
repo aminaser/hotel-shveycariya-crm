@@ -1,4 +1,4 @@
-export type StayType = "booking" | "extension";
+export type StayType = "booking" | "extension" | "alumni";
 export type PaymentStatus = "paid" | "partial" | "unpaid";
 export type RoomStatus = "free" | "occupied" | "cleaning" | "maintenance" | "booked";
 
@@ -53,14 +53,19 @@ export interface Stay {
   check_in: string | null;
   planned_check_out: string | null;
   check_out: string | null;
+  people_count: number;
   payment_amount: string;
+  prepayment: string;
   payment_status: PaymentStatus;
   payment_method: string | null;
+  payment_date: string | null;
+  group_id: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
   client_name: string;
   client_phone: string | null;
+  client_iin: string | null;
   room_number: string;
   created_by_user_id: number | null;
   created_by_name: string | null;
@@ -175,6 +180,7 @@ export interface AnalyticsData {
     };
     bookings_count: number;
     extensions_count: number;
+    alumni_count: number;
   };
   daily: AnalyticsDailyPoint[];
   top_rooms: AnalyticsRoomStat[];

@@ -16,6 +16,7 @@ from app.routers import (
     banquets,
     clients,
     health,
+    restaurant_menu,
     rooms,
     settings as settings_router,
     setup,
@@ -68,4 +69,5 @@ app.include_router(trash.router, prefix=API_PREFIX)
 app.include_router(acts.router, prefix=API_PREFIX)
 app.include_router(analytics.router, prefix=API_PREFIX)
 app.include_router(settings_router.router, prefix=API_PREFIX)
+app.include_router(restaurant_menu.router, prefix=API_PREFIX)
 app.include_router(timesheet.router, prefix=API_PREFIX)

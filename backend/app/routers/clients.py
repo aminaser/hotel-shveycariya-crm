@@ -18,7 +18,8 @@ from app.schemas.client import (
     ClientUpdate,
     StaySummary,
 )
-from app.services.audit import log_activity, set_created_by, set_updated_by, summarize_changes
+from app.services.audit import log_activity, set_updated_by, summarize_changes
+from app.services.client_service import dedupe_clients, find_matching_client, find_or_create_client
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
@@ -49,40 +50,22 @@ def list_clients(
     return query.order_by(Client.full_name.asc()).all()
 
 
+@router.post("/dedupe")
+def dedupe_duplicate_clients(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, int]:
+    """Merge duplicate clients (same IIN / phone / ФИО) into one card."""
+    return dedupe_clients(db, current_user)
+
+
 @router.post("", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)
 def create_client(
     payload: ClientCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Client:
-    if payload.iin:
-        existing = (
-            db.query(Client)
-            .filter(Client.iin == payload.iin, Client.deleted_at.is_(None))
-            .first()
-        )
-        if existing:
-            raise HTTPException(status_code=400, detail="Клиент с таким ИИН уже существует")
-    if payload.bin:
-        existing = (
-            db.query(Client)
-            .filter(Client.bin == payload.bin, Client.deleted_at.is_(None))
-            .first()
-        )
-        if existing:
-            raise HTTPException(status_code=400, detail="Клиент с таким БИН уже существует")
-    client = Client(**payload.model_dump())
-    set_created_by(client, current_user)
-    db.add(client)
-    db.flush()
-    log_activity(
-        db,
-        user=current_user,
-        action="Создала клиента",
-        entity_type="client",
-        entity_id=client.id,
-        entity_label=client.full_name,
-    )
+    client, _created = find_or_create_client(db, payload, current_user)
     db.commit()
     db.refresh(client)
     return client
@@ -135,30 +118,27 @@ def update_client(
 
     data = payload.model_dump(exclude_unset=True)
     old_snapshot = {k: getattr(client, k) for k in data}
-    if "iin" in data and data["iin"]:
-        existing = (
-            db.query(Client)
-            .filter(
-                Client.iin == data["iin"],
-                Client.id != client_id,
-                Client.deleted_at.is_(None),
-            )
-            .first()
+
+    probe_name = data.get("full_name", client.full_name)
+    probe_phone = data.get("phone", client.phone) if "phone" in data else client.phone
+    probe_iin = data.get("iin", client.iin) if "iin" in data else client.iin
+    probe_bin = data.get("bin", client.bin) if "bin" in data else client.bin
+    conflict = find_matching_client(
+        db,
+        full_name=probe_name or client.full_name,
+        phone=probe_phone,
+        iin=probe_iin,
+        bin_value=probe_bin,
+        exclude_id=client_id,
+    )
+    if conflict and (
+        (probe_iin and conflict.iin == probe_iin)
+        or (probe_bin and conflict.bin == probe_bin)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Клиент с таким ИИН/БИН уже есть: {conflict.full_name}",
         )
-        if existing:
-            raise HTTPException(status_code=400, detail="Клиент с таким ИИН уже существует")
-    if "bin" in data and data["bin"]:
-        existing = (
-            db.query(Client)
-            .filter(
-                Client.bin == data["bin"],
-                Client.id != client_id,
-                Client.deleted_at.is_(None),
-            )
-            .first()
-        )
-        if existing:
-            raise HTTPException(status_code=400, detail="Клиент с таким БИН уже существует")
 
     for key, value in data.items():
         setattr(client, key, value)

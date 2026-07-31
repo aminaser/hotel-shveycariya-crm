@@ -27,6 +27,37 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 
 DB_PATH = DATA_DIR / "hotel_crm.db"
 SQLITE_HEADER = b"SQLite format 3\x00"
+# Auto-backup on exit creates a file every close — keep only the newest ones.
+MAX_BACKUPS = 20
+
+
+def _prune_old_backups(keep: int = MAX_BACKUPS) -> None:
+    backups = sorted(
+        BACKUPS_DIR.glob("hotel_crm_*.db"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for old in backups[keep:]:
+        try:
+            old.unlink(missing_ok=True)
+        except OSError:
+            pass
+        for suffix in ("-wal", "-shm"):
+            try:
+                old.with_name(old.name + suffix).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    # Orphan sidecars left after older cleanups / interrupted SQLite copies.
+    for sidecar in list(BACKUPS_DIR.glob("hotel_crm_*.db-wal")) + list(
+        BACKUPS_DIR.glob("hotel_crm_*.db-shm")
+    ):
+        main = BACKUPS_DIR / sidecar.name.removesuffix("-wal").removesuffix("-shm")
+        if not main.exists():
+            try:
+                sidecar.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _settings_response(app_settings, db_path: str) -> AppSettingsResponse:
@@ -107,14 +138,24 @@ def create_backup(
         dst = sqlite3.connect(str(backup_path))
         try:
             src.backup(dst)
+            dst.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         finally:
             dst.close()
     finally:
         src.close()
 
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(str(backup_path) + suffix)
+        try:
+            sidecar.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     app_settings = get_or_create_settings(db)
     app_settings.last_backup_at = datetime.now(timezone.utc)
     db.commit()
+
+    _prune_old_backups()
 
     return BackupResponse(path=str(backup_path), created_at=app_settings.last_backup_at)
 

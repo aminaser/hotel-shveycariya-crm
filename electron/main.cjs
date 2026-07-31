@@ -1,14 +1,24 @@
 const { app, BrowserWindow, ipcMain, dialog } = require("electron");
+const { autoUpdater } = require("electron-updater");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
 
 const isDev = !app.isPackaged;
+const isPortable = Boolean(process.env.PORTABLE_EXECUTABLE_DIR);
 let backendProcess = null;
 let mainWindow = null;
+let updateCheckTimer = null;
+let backendLog = "";
 
 app.setName("Отель Швейцария CRM");
+
+function appendBackendLog(chunk) {
+  const text = chunk.toString();
+  backendLog = (backendLog + text).slice(-8000);
+  console.error("[backend]", text);
+}
 
 function getBackendDir() {
   return isDev
@@ -35,9 +45,29 @@ function getDataDir() {
   return dir;
 }
 
-function waitForBackend(retries = 60) {
+function getLogPath() {
+  return path.join(app.getPath("userData"), "backend.log");
+}
+
+function writeBackendLogFile() {
+  try {
+    fs.writeFileSync(getLogPath(), backendLog || "(empty)\n", "utf8");
+  } catch (error) {
+    console.warn("Could not write backend.log:", error);
+  }
+}
+
+function waitForBackend(retries = 90) {
   return new Promise((resolve, reject) => {
     const attempt = (left) => {
+      if (backendProcess && backendProcess.exitCode !== null) {
+        reject(
+          new Error(
+            `Backend exited early (code ${backendProcess.exitCode}).\n\n${backendLog.trim() || "No output from Python."}`,
+          ),
+        );
+        return;
+      }
       http
         .get("http://127.0.0.1:8000/api/v1/health", (res) => {
           if (res.statusCode === 200) resolve();
@@ -46,7 +76,13 @@ function waitForBackend(retries = 60) {
         })
         .on("error", () => {
           if (left > 0) setTimeout(() => attempt(left - 1), 500);
-          else reject(new Error("Backend not reachable"));
+          else {
+            reject(
+              new Error(
+                `Backend not reachable.\n\n${backendLog.trim() || "Python did not start or produced no output."}\n\nLog: ${getLogPath()}`,
+              ),
+            );
+          }
         });
     };
     attempt(retries);
@@ -57,11 +93,29 @@ function startBackend() {
   const backendDir = getBackendDir();
   const python = getPythonPath(backendDir);
   const dataDir = getDataDir();
+  const runtimeDir = path.join(backendDir, "runtime");
+  const sitePackages = path.join(runtimeDir, "Lib", "site-packages");
 
   if (!fs.existsSync(python)) {
     throw new Error(
-      `Python runtime not found:\n${python}\n\nПересоберите приложение: npm run electron:build`,
+      `Python runtime not found:\n${python}\n\nПереустановите CRM (Setup) или пересоберите: npm run electron:build:win`,
     );
+  }
+
+  backendLog = `python=${python}\ncwd=${backendDir}\ndata=${dataDir}\n`;
+  writeBackendLogFile();
+
+  const env = {
+    ...process.env,
+    HOTEL_CRM_DATA_DIR: dataDir,
+    PYTHONUNBUFFERED: "1",
+    PYTHONDONTWRITEBYTECODE: "1",
+  };
+
+  // Packaged Windows: force portable runtime + site-packages onto sys.path.
+  if (!isDev && process.platform === "win32") {
+    env.PYTHONHOME = runtimeDir;
+    env.PYTHONPATH = [sitePackages, backendDir].join(path.delimiter);
   }
 
   backendProcess = spawn(
@@ -69,23 +123,32 @@ function startBackend() {
     ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"],
     {
       cwd: backendDir,
-      stdio: isDev ? "inherit" : "pipe",
+      stdio: isDev ? "inherit" : ["ignore", "pipe", "pipe"],
       windowsHide: true,
-      env: {
-        ...process.env,
-        HOTEL_CRM_DATA_DIR: dataDir,
-        PYTHONUNBUFFERED: "1",
-      },
+      env,
     },
   );
 
+  backendProcess.on("error", (error) => {
+    appendBackendLog(`spawn error: ${error.message}\n`);
+    writeBackendLogFile();
+  });
+
+  if (backendProcess.stdout) {
+    backendProcess.stdout.on("data", (chunk) => {
+      appendBackendLog(chunk);
+      writeBackendLogFile();
+    });
+  }
   if (backendProcess.stderr) {
     backendProcess.stderr.on("data", (chunk) => {
-      console.error("[backend]", chunk.toString());
+      appendBackendLog(chunk);
+      writeBackendLogFile();
     });
   }
   backendProcess.on("exit", (code, signal) => {
-    console.error(`[backend] exited code=${code} signal=${signal}`);
+    appendBackendLog(`exited code=${code} signal=${signal}\n`);
+    writeBackendLogFile();
   });
 }
 
@@ -161,6 +224,70 @@ async function createWindow() {
 }
 
 ipcMain.handle("get-app-path", () => app.getPath("userData"));
+ipcMain.handle("check-for-updates", async () => {
+  if (isDev || isPortable) {
+    return { ok: false, reason: "updates_unavailable" };
+  }
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return {
+      ok: true,
+      version: result?.updateInfo?.version ?? null,
+    };
+  } catch (error) {
+    console.error("[updater]", error);
+    return { ok: false, reason: error.message || String(error) };
+  }
+});
+
+function setupAutoUpdater() {
+  if (isDev || isPortable) {
+    return;
+  }
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = {
+    info: (...args) => console.log("[updater]", ...args),
+    warn: (...args) => console.warn("[updater]", ...args),
+    error: (...args) => console.error("[updater]", ...args),
+  };
+
+  autoUpdater.on("update-available", (info) => {
+    console.log(`[updater] available: ${info.version}`);
+  });
+
+  autoUpdater.on("update-downloaded", async (info) => {
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    const { response } = await dialog.showMessageBox(win, {
+      type: "info",
+      title: "Обновление готово",
+      message: `Скачана версия ${info.version}`,
+      detail:
+        "Перезапустите приложение, чтобы установить обновление. Данные CRM (база в AppData) сохранятся.",
+      buttons: ["Перезапустить сейчас", "Позже"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (response === 0) {
+      autoUpdater.quitAndInstall(false, true);
+    }
+  });
+
+  autoUpdater.on("error", (error) => {
+    console.error("[updater]", error);
+  });
+
+  const check = () => {
+    autoUpdater.checkForUpdates().catch((error) => {
+      console.error("[updater] check failed:", error);
+    });
+  };
+
+  setTimeout(check, 8000);
+  updateCheckTimer = setInterval(check, 4 * 60 * 60 * 1000);
+}
 
 app.whenReady().then(async () => {
   try {
@@ -169,8 +296,10 @@ app.whenReady().then(async () => {
     }
     await waitForBackend();
     await createWindow();
+    setupAutoUpdater();
   } catch (error) {
     console.error(error);
+    writeBackendLogFile();
     dialog.showErrorBox(
       "Отель Швейцария CRM",
       `Не удалось запустить приложение.\n\n${error.message || error}`,
@@ -188,6 +317,10 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  if (updateCheckTimer) {
+    clearInterval(updateCheckTimer);
+    updateCheckTimer = null;
+  }
   if (backendProcess) {
     backendProcess.kill();
     backendProcess = null;

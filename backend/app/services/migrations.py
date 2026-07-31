@@ -42,6 +42,10 @@ STAY_COLUMNS = {
     "updated_by_user_id": "INTEGER",
     "updated_by_name": "VARCHAR(255)",
     "planned_check_out": "DATE",
+    "payment_date": "DATE",
+    "people_count": "INTEGER DEFAULT 1",
+    "prepayment": "NUMERIC(12, 2) DEFAULT 0",
+    "group_id": "VARCHAR(36)",
 }
 
 USER_COLUMNS = {
@@ -143,6 +147,7 @@ def run_migrations() -> None:
         # departure date, which blocked the «Выезд» action whenever a date was set.
         _migrate_planned_check_out(conn)
         _migrate_client_iin_bin_unique(conn)
+        _migrate_payment_date_backfill(conn)
 
     db = SessionLocal()
     try:
@@ -187,6 +192,48 @@ def _migrate_client_iin_bin_unique(conn) -> None:
         text(
             "INSERT INTO _crm_migrations (name, applied_at) "
             "VALUES ('client_iin_bin_soft_unique', :applied_at)"
+        ),
+        {"applied_at": today_local().isoformat()},
+    )
+    conn.commit()
+
+
+def _migrate_payment_date_backfill(conn) -> None:
+    """For already-paid stays without payment_date, use record_date."""
+    inspector = inspect(engine)
+    if "stays" not in inspector.get_table_names():
+        return
+    columns = {col["name"] for col in inspector.get_columns("stays")}
+    if "payment_date" not in columns:
+        return
+
+    conn.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS _crm_migrations ("
+            "name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+    )
+    conn.commit()
+    done = conn.execute(
+        text("SELECT 1 FROM _crm_migrations WHERE name = 'payment_date_backfill'")
+    ).fetchone()
+    if done:
+        return
+
+    conn.execute(
+        text(
+            """
+            UPDATE stays
+            SET payment_date = record_date
+            WHERE payment_date IS NULL
+              AND payment_status IN ('paid', 'partial')
+            """
+        )
+    )
+    conn.execute(
+        text(
+            "INSERT INTO _crm_migrations (name, applied_at) "
+            "VALUES ('payment_date_backfill', :applied_at)"
         ),
         {"applied_at": today_local().isoformat()},
     )

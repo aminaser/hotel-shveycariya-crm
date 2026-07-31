@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PasswordInput } from "@/components/ui/password-input";
 import { type AuthUser, useAuthStore } from "@/stores/auth";
 
 export function SetupPage() {
@@ -118,16 +119,14 @@ export function SetupPage() {
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label>Пароль</Label>
-                <Input
-                  type="password"
+                <PasswordInput
                   value={form.password}
                   onChange={(e) => setForm({ ...form, password: e.target.value })}
                 />
               </div>
               <div className="space-y-2">
                 <Label>Подтверждение</Label>
-                <Input
-                  type="password"
+                <PasswordInput
                   value={form.confirm}
                   onChange={(e) => setForm({ ...form, confirm: e.target.value })}
                 />

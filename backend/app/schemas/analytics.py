@@ -53,6 +53,7 @@ class AnalyticsSummary(BaseModel):
     payments_by_method: PaymentBreakdown
     bookings_count: int
     extensions_count: int
+    alumni_count: int = 0
 
 
 class AnalyticsResponse(BaseModel):

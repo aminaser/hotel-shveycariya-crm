@@ -113,7 +113,7 @@ export function useBackgroundPolling() {
   });
 }
 
-export function useNewRecordNotifications(navigate: (path: string) => void) {
+export function useNewRecordNotifications() {
   const queryClient = useQueryClient();
   const countsRef = useRef<Map<string, number>>(new Map());
   const initializedRef = useRef(false);
@@ -148,14 +148,7 @@ export function useNewRecordNotifications(navigate: (path: string) => void) {
             `Новая запись в «${watched.label}»!`,
             {
               description: diff === 1 ? "Добавлена 1 запись" : `Добавлено ${diff} записей`,
-              action: {
-                label: "Перейти",
-                onClick: () => {
-                  useBadgeStore.getState().clear(watched.route);
-                  navigate(watched.route);
-                },
-              },
-              duration: Infinity,
+              duration: 1000,
             },
           );
         }
@@ -171,5 +164,5 @@ export function useNewRecordNotifications(navigate: (path: string) => void) {
       unsubscribe();
       clearTimeout(timer);
     };
-  }, [queryClient, navigate]);
+  }, [queryClient]);
 }

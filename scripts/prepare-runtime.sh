@@ -72,6 +72,7 @@ if [[ "$TARGET" == "win" || "$TARGET" == "windows" ]]; then
     --implementation cp \
     --abi cp312 \
     --only-binary=:all: \
+    --no-compile \
     --upgrade \
     "fastapi==0.115.6" \
     "uvicorn==0.34.0" \
@@ -84,10 +85,25 @@ if [[ "$TARGET" == "win" || "$TARGET" == "windows" ]]; then
     "python-multipart==0.0.20" \
     "eval_type_backport==0.2.2" \
     "openpyxl==3.1.5" \
+    "tzdata==2025.2" \
     "httptools>=0.6.3" \
     "watchfiles>=0.13" \
     "websockets>=10.4" \
     "python-dotenv>=0.21.0"
+
+  # python-build-standalone ships python*._pth with `#import site` commented out,
+  # so Lib/site-packages is ignored and uvicorn fails to import on clean PCs.
+  for pth in "$RUNTIME"/python*._pth; do
+    if [[ -f "$pth" ]]; then
+      echo "==> Enabling site-packages in $(basename "$pth")"
+      if grep -q '^#import site' "$pth"; then
+        # works on both BSD/macOS and GNU sed
+        sed -i.bak 's/^#import site/import site/' "$pth" && rm -f "${pth}.bak"
+      elif ! grep -q '^import site' "$pth"; then
+        printf '\nimport site\n' >> "$pth"
+      fi
+    fi
+  done
 
   echo "==> Windows runtime ready at $RUNTIME"
   ls -la "$RUNTIME/python.exe"

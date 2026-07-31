@@ -4,8 +4,8 @@ import { toast } from "sonner";
 import { apiFetch, ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PasswordInput } from "@/components/ui/password-input";
 import { type AuthUser, useAuthStore } from "@/stores/auth";
 
 interface LoginResponse {
@@ -51,9 +51,8 @@ export function LockScreen() {
           <form onSubmit={unlock} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="lock-password">Пароль</Label>
-              <Input
+              <PasswordInput
                 id="lock-password"
-                type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoFocus

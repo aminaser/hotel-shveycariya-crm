@@ -620,7 +620,7 @@ export function SpaJournalPage() {
           if (!open) setEditingId(null);
         }}
       >
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg" closeOnOutsideClick={false}>
           <DialogHeader>
             <DialogTitle>
               {editingId ? "Редактировать запись" : "Новая запись в журнал"}

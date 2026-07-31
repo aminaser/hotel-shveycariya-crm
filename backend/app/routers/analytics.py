@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
-from app.core.permissions import require_owner
+from app.core.permissions import require_analytics_owner
 from app.models.employee import Employee
 from app.models.room import Room, RoomStatus
 from app.models.stay import PaymentStatus, Stay, StayType
@@ -24,6 +24,7 @@ from app.schemas.analytics import (
     RoomStat,
 )
 from app.schemas.stay import PaymentBreakdown
+from app.services.payment_amount import received_payment_amount
 from app.services.room_service import today_local
 from app.services.timesheet_calc import shift_earnings, shift_hours
 
@@ -32,20 +33,28 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 PRESET_METHODS = {"cash", "kaspi", "halyk"}
 
 
+def _payment_day(stay: Stay) -> date | None:
+    """Revenue day = payment_date only. Check-in/record_date never count as revenue day."""
+    if stay.payment_status == PaymentStatus.unpaid:
+        return None
+    return stay.payment_date
+
+
 def _payment_breakdown(stays: list[Stay]) -> PaymentBreakdown:
     breakdown = PaymentBreakdown()
     for stay in stays:
-        if stay.payment_status == PaymentStatus.unpaid:
+        amount = received_payment_amount(stay)
+        if amount <= 0:
             continue
         method = stay.payment_method or "other"
         if method == "cash":
-            breakdown.cash += stay.payment_amount
+            breakdown.cash += amount
         elif method == "kaspi":
-            breakdown.kaspi += stay.payment_amount
+            breakdown.kaspi += amount
         elif method == "halyk":
-            breakdown.halyk += stay.payment_amount
+            breakdown.halyk += amount
         else:
-            breakdown.other += stay.payment_amount
+            breakdown.other += amount
     return breakdown
 
 
@@ -55,7 +64,7 @@ def get_analytics(
     date_from: Optional[date] = Query(default=None),
     date_to: Optional[date] = Query(default=None),
     db: Session = Depends(get_db),
-    _: User = Depends(require_owner),
+    _: User = Depends(require_analytics_owner),
 ) -> AnalyticsResponse:
     # Explicit range takes priority over the preset period.
     if date_from is not None:
@@ -68,6 +77,7 @@ def get_analytics(
         date_from = today - timedelta(days=period - 1)
     period = (today - date_from).days + 1
 
+    # Stays for occupancy / check-ins in the period (by booking record_date).
     stays = (
         db.query(Stay)
         .options(joinedload(Stay.client), joinedload(Stay.room))
@@ -79,12 +89,22 @@ def get_analytics(
         .all()
     )
 
+    # Revenue attributed strictly by payment_date (not booking / check-in date).
+    revenue_candidates = (
+        db.query(Stay)
+        .options(joinedload(Stay.client), joinedload(Stay.room))
+        .filter(
+            Stay.deleted_at.is_(None),
+            Stay.payment_status.in_([PaymentStatus.paid, PaymentStatus.partial]),
+            Stay.payment_date.isnot(None),
+            Stay.payment_date >= date_from,
+            Stay.payment_date <= today,
+        )
+        .all()
+    )
+    paid_stays = list(revenue_candidates)
+
     all_stays_in_period = stays
-    paid_stays = [
-        s
-        for s in stays
-        if s.payment_status in (PaymentStatus.paid, PaymentStatus.partial)
-    ]
 
     daily: dict = defaultdict(
         lambda: {
@@ -99,10 +119,13 @@ def get_analytics(
     for stay in all_stays_in_period:
         key = stay.record_date
         daily[key]["stays_count"] += 1
-        if stay.stay_type == StayType.booking:
+        if stay.stay_type in (StayType.booking, StayType.alumni):
             daily[key]["checkins"] += 1
-        if stay.payment_status in (PaymentStatus.paid, PaymentStatus.partial):
-            daily[key]["revenue"] += stay.payment_amount
+
+    for stay in paid_stays:
+        day = _payment_day(stay)
+        if day is not None:
+            daily[day]["revenue"] += received_payment_amount(stay)
 
     checkout_stays = (
         db.query(Stay)
@@ -166,11 +189,24 @@ def get_analytics(
         )
         cursor += timedelta(days=1)
 
-    total_revenue = sum((s.payment_amount for s in paid_stays), Decimal("0"))
-    total_checkins = sum(1 for s in all_stays_in_period if s.stay_type == StayType.booking)
+    total_revenue = sum((received_payment_amount(s) for s in paid_stays), Decimal("0"))
+    total_checkins = sum(
+        1 for s in all_stays_in_period if s.stay_type in (StayType.booking, StayType.alumni)
+    )
     total_checkouts = len(checkout_stays)
-    unpaid_stays = [s for s in all_stays_in_period if s.payment_status == PaymentStatus.unpaid]
-    unpaid_amount = sum((s.payment_amount for s in unpaid_stays), Decimal("0"))
+    outstanding_stays = [
+        s
+        for s in all_stays_in_period
+        if s.payment_status in (PaymentStatus.unpaid, PaymentStatus.partial)
+    ]
+    unpaid_amount = sum(
+        (
+            (s.payment_amount or Decimal("0")) - received_payment_amount(s)
+            for s in outstanding_stays
+        ),
+        Decimal("0"),
+    )
+    unpaid_stays = outstanding_stays
 
     total_rooms = db.query(Room).count() or 1
     occupied = db.query(Room).filter(Room.status == RoomStatus.occupied).count()
@@ -180,7 +216,7 @@ def get_analytics(
         lambda: {"revenue": Decimal("0"), "count": 0, "number": ""}
     )
     for stay in paid_stays:
-        room_stats[stay.room_id]["revenue"] += stay.payment_amount
+        room_stats[stay.room_id]["revenue"] += received_payment_amount(stay)
         room_stats[stay.room_id]["count"] += 1
         room_stats[stay.room_id]["number"] = stay.room.number
 
@@ -204,8 +240,9 @@ def get_analytics(
     for stay in all_stays_in_period:
         client_stats[stay.client_id]["visits"] += 1
         client_stats[stay.client_id]["name"] = stay.client.full_name
-        if stay.payment_status in (PaymentStatus.paid, PaymentStatus.partial):
-            client_stats[stay.client_id]["revenue"] += stay.payment_amount
+    for stay in paid_stays:
+        client_stats[stay.client_id]["revenue"] += received_payment_amount(stay)
+        client_stats[stay.client_id]["name"] = stay.client.full_name
 
     top_clients = sorted(
         [
@@ -259,6 +296,7 @@ def get_analytics(
         extensions_count=sum(
             1 for s in all_stays_in_period if s.stay_type == StayType.extension
         ),
+        alumni_count=sum(1 for s in all_stays_in_period if s.stay_type == StayType.alumni),
     )
 
     return AnalyticsResponse(

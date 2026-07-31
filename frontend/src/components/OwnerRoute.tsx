@@ -1,7 +1,8 @@
 import { Navigate } from "react-router-dom";
 
-import { useAuthStore } from "@/stores/auth";
+import { canViewAnalytics, useAuthStore } from "@/stores/auth";
 
+/** Analytics and menu settings are only for Жибек (username zhibek). */
 export function OwnerRoute({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((s) => s.user);
 
@@ -9,7 +10,7 @@ export function OwnerRoute({ children }: { children: React.ReactNode }) {
     return null;
   }
 
-  if (user.role !== "owner") {
+  if (!canViewAnalytics(user)) {
     return <Navigate to="/registry" replace />;
   }
 

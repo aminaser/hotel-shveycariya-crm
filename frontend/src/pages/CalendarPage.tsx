@@ -16,6 +16,7 @@ import {
   isSupabaseConfigured,
   supabase,
 } from "@/lib/supabase";
+import { groupStays } from "@/lib/stay-groups";
 import { cn } from "@/lib/utils";
 
 type EventKind = "banquet" | "spa" | "checkin" | "checkout";
@@ -116,27 +117,34 @@ function buildEvents(
     });
   }
 
-  for (const stay of stays) {
+  for (const group of groupStays(stays)) {
+    const stay = group.primary;
     if (stay.check_in && stay.check_in >= rangeFrom && stay.check_in <= rangeTo) {
       events.push({
-        id: `checkin-${stay.id}`,
+        id: `checkin-${group.key}`,
         kind: "checkin",
         date: stay.check_in,
         time: null,
         title: stay.client_name,
-        subtitle: `Номер ${stay.room_number}`,
+        subtitle:
+          group.stays.length > 1
+            ? `Номера ${group.roomNumbers}`
+            : `Номер ${stay.room_number}`,
         href: "/registry",
       });
     }
     const departure = stay.planned_check_out ?? stay.check_out;
     if (departure && departure >= rangeFrom && departure <= rangeTo) {
       events.push({
-        id: `checkout-${stay.id}`,
+        id: `checkout-${group.key}`,
         kind: "checkout",
         date: departure,
         time: null,
         title: stay.client_name,
-        subtitle: `Номер ${stay.room_number}`,
+        subtitle:
+          group.stays.length > 1
+            ? `Номера ${group.roomNumbers}`
+            : `Номер ${stay.room_number}`,
         href: "/registry",
       });
     }

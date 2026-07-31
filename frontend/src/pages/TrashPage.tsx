@@ -12,7 +12,6 @@ import {
   isSupabaseConfigured,
   supabase,
 } from "@/lib/supabase";
-import { useAuthStore } from "@/stores/auth";
 
 interface CrmTrashItem {
   type: "stay" | "client" | "banquet";
@@ -53,6 +52,7 @@ async function fetchSpaTrash(): Promise<SpaBooking[]> {
     .from("spa_bookings")
     .select("*")
     .not("deleted_at", "is", null)
+    .or("notes.is.null,notes.neq.__PURGED__")
     .order("deleted_at", { ascending: false });
   if (error) throw new Error(error.message);
   return (data ?? []) as SpaBooking[];
@@ -64,9 +64,71 @@ async function fetchRequestsTrash(): Promise<GuestRequest[]> {
     .from("requests")
     .select("*")
     .not("deleted_at", "is", null)
+    .or("source.is.null,source.neq.__purged__")
     .order("deleted_at", { ascending: false });
   if (error) throw new Error(error.message);
   return (data ?? []) as GuestRequest[];
+}
+
+async function purgeSupabaseTable(table: "spa_bookings" | "requests"): Promise<void> {
+  if (!supabase) return;
+
+  const selectTrashIds = async (): Promise<string[]> => {
+    let query = supabase.from(table).select("id").not("deleted_at", "is", null);
+    query =
+      table === "requests"
+        ? query.or("source.is.null,source.neq.__purged__")
+        : query.or("notes.is.null,notes.neq.__PURGED__");
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return (data ?? []).map((row) => row.id as string);
+  };
+
+  const ids = await selectTrashIds();
+  if (ids.length === 0) return;
+
+  const chunkSize = 100;
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize);
+    // Prefer hard delete when RLS allows it (spa_bookings).
+    const { error: deleteError } = await supabase.from(table).delete().in("id", chunk);
+    if (deleteError) {
+      // requests table historically had no DELETE policy — hide via UPDATE instead.
+      const patch =
+        table === "requests"
+          ? { source: "__purged__" }
+          : { notes: "__PURGED__" };
+      const { error: updateError } = await supabase
+        .from(table)
+        .update(patch)
+        .in("id", chunk);
+      if (updateError) {
+        throw new Error(`${deleteError.message}; ${updateError.message}`);
+      }
+    }
+  }
+
+  // If DELETE returned OK but RLS removed 0 rows, force UPDATE hide.
+  const remaining = await selectTrashIds();
+  if (remaining.length > 0) {
+    for (let i = 0; i < remaining.length; i += chunkSize) {
+      const chunk = remaining.slice(i, i + chunkSize);
+      const patch =
+        table === "requests"
+          ? { source: "__purged__" }
+          : { notes: "__PURGED__" };
+      const { error: updateError } = await supabase
+        .from(table)
+        .update(patch)
+        .in("id", chunk);
+      if (updateError) throw new Error(updateError.message);
+    }
+  }
+
+  const stillLeft = await selectTrashIds();
+  if (stillLeft.length > 0) {
+    throw new Error(`не удалось убрать ${stillLeft.length} записей`);
+  }
 }
 
 async function restoreSupabaseRow(table: "spa_bookings" | "requests", id: string) {
@@ -92,7 +154,6 @@ function formatDate(isoDate: string): string {
 
 export function TrashPage() {
   const queryClient = useQueryClient();
-  const isOwner = useAuthStore((s) => s.user?.role === "owner");
 
   const { data: crmTrash = [], isLoading: crmLoading } = useQuery({
     queryKey: ["crm-trash"],
@@ -155,21 +216,49 @@ export function TrashPage() {
 
   const clearTrash = useMutation({
     mutationFn: async () => {
-      await apiFetch("/trash/clear", { method: "DELETE" });
+      const failures: string[] = [];
+
+      try {
+        await apiFetch("/trash/clear", { method: "DELETE" });
+      } catch (e) {
+        const msg =
+          e instanceof ApiError
+            ? e.message
+            : e instanceof Error
+              ? e.message
+              : "ошибка CRM";
+        failures.push(`Журнал/клиенты/банкеты: ${msg}`);
+      }
+
       if (supabase) {
-        await supabase.from("spa_bookings").delete().not("deleted_at", "is", null);
-        await supabase.from("requests").delete().not("deleted_at", "is", null);
+        for (const table of ["spa_bookings", "requests"] as const) {
+          const label = table === "spa_bookings" ? "Сауна/баня" : "Заявки";
+          try {
+            await purgeSupabaseTable(table);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : "ошибка";
+            failures.push(`${label}: ${msg}`);
+          }
+        }
+      }
+
+      if (failures.length > 0) {
+        throw new Error(failures.join("; "));
       }
     },
     onSuccess: () => {
-      toast.success("Корзина очищена");
+      toast.success("Корзина очищена полностью");
       invalidateAll();
     },
     onError: (e) => {
       if (e instanceof ApiError) toast.error(e.message);
+      else if (e instanceof Error) toast.error(e.message);
       else toast.error("Не удалось очистить корзину");
+      invalidateAll();
     },
   });
+
+  const trashCount = crmTrash.length + spaTrash.length + requestsTrash.length;
 
   const entries: TrashEntry[] = [
     ...crmTrash.map((item): TrashEntry => ({
@@ -224,23 +313,27 @@ export function TrashPage() {
             Корзина
           </h1>
           <p className="text-sm text-muted-foreground">
-            Удалённые записи из всех разделов CRM. Их можно восстановить
-            {isOwner ? " или очистить навсегда (только владелец)" : ""}.
+            Удалённые записи из всех разделов CRM. Их можно восстановить или очистить
+            корзину целиком навсегда.
           </p>
         </div>
-        {isOwner && (crmTrash.length + spaTrash.length + requestsTrash.length) > 0 && (
+        {trashCount > 0 && (
           <Button
             size="sm"
             variant="outline"
             className="text-red-600"
             disabled={clearTrash.isPending}
             onClick={() => {
-              if (confirm("Очистить корзину навсегда? Это действие нельзя отменить.")) {
+              if (
+                confirm(
+                  `Очистить всю корзину навсегда (${trashCount} записей)? Это действие нельзя отменить.`,
+                )
+              ) {
                 clearTrash.mutate();
               }
             }}
           >
-            Очистить корзину
+            {clearTrash.isPending ? "Очистка…" : "Очистить всю корзину"}
           </Button>
         )}
       </div>

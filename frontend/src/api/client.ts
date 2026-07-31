@@ -1,6 +1,19 @@
 import { useAuthStore } from "@/stores/auth";
 
-const API_BASE = "/api/v1";
+function resolveApiBase(): string {
+  if (import.meta.env.VITE_API_BASE) {
+    return import.meta.env.VITE_API_BASE;
+  }
+  // Packaged Electron loads index.html via file:// — relative /api won't reach uvicorn.
+  if (typeof window !== "undefined") {
+    if (window.electronAPI?.isElectron || window.location.protocol === "file:") {
+      return "http://127.0.0.1:8000/api/v1";
+    }
+  }
+  return "/api/v1";
+}
+
+const API_BASE = resolveApiBase();
 
 export class ApiError extends Error {
   status: number;
@@ -9,6 +22,20 @@ export class ApiError extends Error {
     super(message);
     this.status = status;
   }
+}
+
+function messageFromErrorBody(data: {
+  detail?: string | Array<{ msg?: string }>;
+}): string {
+  if (typeof data.detail === "string") return data.detail;
+  if (Array.isArray(data.detail) && data.detail.length > 0) {
+    const joined = data.detail
+      .map((item) => item.msg)
+      .filter(Boolean)
+      .join("; ");
+    if (joined) return joined;
+  }
+  return "Ошибка запроса";
 }
 
 // On expired/invalid token, drop the session so ProtectedRoute redirects to login
@@ -42,8 +69,7 @@ export async function apiFetch<T>(
   if (!response.ok) {
     let message = "Ошибка запроса";
     try {
-      const data = (await response.json()) as { detail?: string };
-      if (data.detail) message = data.detail;
+      message = messageFromErrorBody((await response.json()) as Parameters<typeof messageFromErrorBody>[0]);
     } catch {
       // ignore
     }
@@ -82,8 +108,7 @@ export async function apiDownload(
   if (!response.ok) {
     let message = "Ошибка запроса";
     try {
-      const data = (await response.json()) as { detail?: string };
-      if (data.detail) message = data.detail;
+      message = messageFromErrorBody((await response.json()) as Parameters<typeof messageFromErrorBody>[0]);
     } catch {
       // ignore
     }
@@ -98,4 +123,8 @@ export async function apiDownload(
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+export function apiUrl(path: string): string {
+  return `${API_BASE}${path}`;
 }

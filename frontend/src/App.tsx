@@ -10,9 +10,11 @@ import { ActsPage } from "@/pages/ActsPage";
 import { ActivityPage } from "@/pages/ActivityPage";
 import { AnalyticsPage } from "@/pages/AnalyticsPage";
 import { BanquetsPage } from "@/pages/BanquetsPage";
+import { BookingsPage } from "@/pages/BookingsPage";
 import { CalendarPage } from "@/pages/CalendarPage";
 import { ClientsPage } from "@/pages/ClientsPage";
 import { LoginPage } from "@/pages/LoginPage";
+import { MenuSettingsPage } from "@/pages/MenuSettingsPage";
 import { RegistryPage } from "@/pages/RegistryPage";
 import { RequestsPage } from "@/pages/RequestsPage";
 import { RoomsPage } from "@/pages/RoomsPage";
@@ -34,15 +36,33 @@ function RootRedirect() {
 }
 
 export default function App() {
-  const { data: setupStatus, isLoading } = useQuery({
+  const { data: setupStatus, isLoading, isError, refetch } = useQuery({
     queryKey: ["setup-status"],
     queryFn: () => apiFetch<{ is_initialized: boolean }>("/setup/status"),
+    retry: 2,
   });
 
   if (isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center text-muted-foreground">
         Загрузка...
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 p-6 text-center">
+        <p className="text-muted-foreground">
+          Не удалось связаться с сервером CRM. Подождите пару секунд и попробуйте снова.
+        </p>
+        <button
+          type="button"
+          className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground"
+          onClick={() => void refetch()}
+        >
+          Повторить
+        </button>
       </div>
     );
   }
@@ -64,6 +84,7 @@ export default function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route element={<ProtectedRoute />}>
           <Route path="/registry" element={<RegistryPage />} />
+          <Route path="/bookings" element={<BookingsPage />} />
           <Route path="/requests" element={<RequestsPage />} />
           <Route path="/spa" element={<SpaJournalPage />} />
           <Route path="/spa-journal" element={<Navigate to="/spa" replace />} />
@@ -74,6 +95,14 @@ export default function App() {
             element={
               <OwnerRoute>
                 <AnalyticsPage />
+              </OwnerRoute>
+            }
+          />
+          <Route
+            path="/menu-settings"
+            element={
+              <OwnerRoute>
+                <MenuSettingsPage />
               </OwnerRoute>
             }
           />
@@ -88,7 +117,7 @@ export default function App() {
         <Route path="/" element={<RootRedirect />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-      <Toaster position="top-right" richColors />
+      <Toaster position="top-right" richColors duration={1000} toastOptions={{ duration: 1000 }} />
     </HashRouter>
   );
 }

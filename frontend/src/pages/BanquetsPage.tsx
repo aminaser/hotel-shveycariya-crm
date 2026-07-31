@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { PartyPopper, Pencil, Plus, Trash2 } from "lucide-react";
+import { PartyPopper, Pencil, Plus, Trash2, UtensilsCrossed } from "lucide-react";
 import { toast } from "sonner";
 
 import { apiFetch, ApiError } from "@/api/client";
 import type { Banquet } from "@/api/types";
 import { AuthorFilter } from "@/components/AuthorFilter";
 import { AuthorshipMeta } from "@/components/AuthorshipMeta";
+import { BanquetMenuSheet } from "@/components/BanquetMenuSheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,7 +19,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { dishesTotal, formatDishesPreview, parseDishes } from "@/lib/banquet-dishes";
 import { formatDate, formatMoney } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 interface BanquetForm {
   event_date: string;
@@ -63,9 +66,14 @@ function toForm(b: Banquet): BanquetForm {
 export function BanquetsPage() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [editBanquet, setEditBanquet] = useState<Banquet | null>(null);
   const [form, setForm] = useState<BanquetForm>(emptyForm());
   const [authorId, setAuthorId] = useState<number | null>(null);
+
+  const dishesPreview = formatDishesPreview(form.dishes || null);
+  const parsedDishes = parseDishes(form.dishes);
+  const dishesSum = dishesTotal(parsedDishes.items);
 
   const { data: banquets = [], isLoading } = useQuery({
     queryKey: ["banquets", authorId],
@@ -81,12 +89,14 @@ export function BanquetsPage() {
   const openCreate = () => {
     setEditBanquet(null);
     setForm(emptyForm());
+    setMenuOpen(false);
     setDialogOpen(true);
   };
 
   const openEdit = (b: Banquet) => {
     setEditBanquet(b);
     setForm(toForm(b));
+    setMenuOpen(false);
     setDialogOpen(true);
   };
 
@@ -224,8 +234,8 @@ export function BanquetsPage() {
                       <span className="text-muted-foreground">нет</span>
                     )}
                   </td>
-                  <td className="max-w-[260px] whitespace-pre-line px-4 py-3 text-xs text-muted-foreground">
-                    {b.dishes ?? "—"}
+                  <td className="max-w-[280px] whitespace-pre-line px-4 py-3 text-xs text-muted-foreground">
+                    {formatDishesPreview(b.dishes)}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1">
@@ -253,8 +263,31 @@ export function BanquetsPage() {
         </div>
       )}
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
+      <Dialog
+        open={dialogOpen}
+        modal={!menuOpen}
+        onOpenChange={(open) => {
+          if (!open && menuOpen) return;
+          setDialogOpen(open);
+        }}
+      >
+        <DialogContent
+          className="max-h-[90vh] max-w-lg overflow-y-auto"
+          // Keep true so Radix does not freeze focus/pointer outside; we only block dismiss while menu is open.
+          closeOnOutsideClick
+          onPointerDownOutside={(event) => {
+            if (menuOpen) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (menuOpen) event.preventDefault();
+          }}
+          onEscapeKeyDown={(event) => {
+            if (menuOpen) {
+              event.preventDefault();
+              setMenuOpen(false);
+            }
+          }}
+        >
           <DialogHeader>
             <DialogTitle>
               {editBanquet ? "Редактировать бронирование" : "Новое бронирование банкета"}
@@ -336,12 +369,35 @@ export function BanquetsPage() {
             </div>
             <div className="space-y-2">
               <Label>Список заказных блюд</Label>
-              <textarea
-                className="min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                value={form.dishes}
-                onChange={(e) => set("dishes")(e.target.value)}
-                placeholder={"Салат «Цезарь» — 10 порций\nПлов — 10 порций\n…"}
-              />
+              <button
+                type="button"
+                onClick={() => setMenuOpen(true)}
+                className={cn(
+                  "group w-full rounded-xl border border-input bg-transparent px-3 py-3 text-left shadow-sm transition-colors",
+                  "hover:border-emerald-500/40 hover:bg-emerald-50/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                )}
+              >
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700">
+                    <UtensilsCrossed className="h-3.5 w-3.5" />
+                    Открыть меню
+                  </span>
+                  {dishesSum > 0 && (
+                    <span className="text-sm font-semibold tabular-nums text-emerald-700">
+                      {formatMoney(dishesSum)}
+                    </span>
+                  )}
+                </div>
+                {form.dishes.trim() ? (
+                  <pre className="whitespace-pre-wrap font-sans text-xs leading-relaxed text-muted-foreground">
+                    {dishesPreview}
+                  </pre>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Нажмите, чтобы выбрать блюда из меню ресторана…
+                  </p>
+                )}
+              </button>
             </div>
           </div>
           <DialogFooter>
@@ -354,6 +410,13 @@ export function BanquetsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <BanquetMenuSheet
+        open={menuOpen}
+        value={form.dishes}
+        onClose={() => setMenuOpen(false)}
+        onSave={(serialized) => set("dishes")(serialized)}
+      />
     </div>
   );
 }

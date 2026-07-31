@@ -46,6 +46,7 @@ const CHART_COLORS = {
   other: "#94a3b8",
   booking: "#1e3a5f",
   extension: "#c9a227",
+  alumni: "#0f766e",
 };
 
 function parseAmount(value: string): number {
@@ -146,6 +147,7 @@ export function AnalyticsPage() {
   const stayTypePie = [
     { name: "Брони", value: summary.bookings_count, key: "booking" },
     { name: "Продления", value: summary.extensions_count, key: "extension" },
+    { name: "Встреча выпускников", value: summary.alumni_count ?? 0, key: "alumni" },
   ].filter((item) => item.value > 0);
 
   const roomsChart = top_rooms.map((r) => ({
@@ -174,6 +176,7 @@ export function AnalyticsPage() {
     other: CHART_COLORS.other,
     booking: CHART_COLORS.booking,
     extension: CHART_COLORS.extension,
+    alumni: CHART_COLORS.alumni,
   };
 
   return (

@@ -73,7 +73,7 @@ def list_rooms(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> list[RoomResponse]:
-    # Auto check-in: after 14:00 on the booking date, booked → occupied.
+    # Auto check-in: after 13:00 on the booking date, booked → occupied.
     apply_due_checkins(db)
     rooms = db.query(Room).all()
     rooms_sorted = sorted(rooms, key=_sort_room_number)

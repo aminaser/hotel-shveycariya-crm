@@ -9,7 +9,9 @@ from app.models.room import Room, RoomStatus
 from app.models.stay import Stay, StayType
 
 TZ = ZoneInfo("Asia/Almaty")
-CHECK_IN_HOUR = 14
+# Buffer between guests on the same calendar day: out by 12:00, in from 13:00.
+CHECK_OUT_HOUR = 12
+CHECK_IN_HOUR = 13
 
 
 def today_local() -> date:
@@ -20,7 +22,40 @@ def now_local() -> datetime:
     return datetime.now(TZ)
 
 
-def get_active_stay(db: Session, room_id: int, exclude_stay_id: int | None = None) -> Stay | None:
+def stay_check_in_date(stay: Stay) -> date:
+    return stay.check_in or stay.record_date
+
+
+def stay_period_end(stay: Stay) -> date | None:
+    """Planned or actual departure date (checkout day, room free after 12:00)."""
+    return stay.check_out or stay.planned_check_out
+
+
+def periods_overlap(
+    a_start: date,
+    a_end: date | None,
+    b_start: date,
+    b_end: date | None,
+) -> bool:
+    """Half-open hotel days [start, end): same-day turnover does not overlap.
+
+    Guest A: check-in Mon, checkout Wed 12:00 → occupies Mon..Tue nights, free Wed 12:00.
+    Guest B: check-in Wed 13:00 → [Wed, ...) does not overlap [Mon, Wed).
+    """
+    if a_end is None and b_end is None:
+        return True
+    if a_end is None:
+        return a_start < (b_end or a_start)
+    if b_end is None:
+        return b_start < a_end
+    return a_start < b_end and b_start < a_end
+
+
+def get_open_stays(
+    db: Session,
+    room_id: int,
+    exclude_stay_id: int | None = None,
+) -> list[Stay]:
     query = (
         db.query(Stay)
         .options(joinedload(Stay.client))
@@ -32,11 +67,18 @@ def get_active_stay(db: Session, room_id: int, exclude_stay_id: int | None = Non
     )
     if exclude_stay_id is not None:
         query = query.filter(Stay.id != exclude_stay_id)
-    return query.order_by(Stay.record_date.desc(), Stay.id.desc()).first()
+    return query.order_by(Stay.record_date.desc(), Stay.id.desc()).all()
 
 
-def stay_check_in_date(stay: Stay) -> date:
-    return stay.check_in or stay.record_date
+def get_active_stay(db: Session, room_id: int, exclude_stay_id: int | None = None) -> Stay | None:
+    """Stay that currently drives room status (prefer occupied over future booking)."""
+    open_stays = get_open_stays(db, room_id, exclude_stay_id=exclude_stay_id)
+    if not open_stays:
+        return None
+    occupying = [s for s in open_stays if stay_should_occupy(s)]
+    if occupying:
+        return occupying[0]
+    return open_stays[0]
 
 
 def stay_should_occupy(stay: Stay, now: datetime | None = None) -> bool:
@@ -46,7 +88,7 @@ def stay_should_occupy(stay: Stay, now: datetime | None = None) -> bool:
     - extension → always occupied
     - check-in date in the past → occupied
     - check-in date in the future → booked
-    - check-in date is today → occupied only from 14:00 (Asia/Almaty)
+    - check-in date is today → occupied only from 13:00 (Asia/Almaty)
     """
     now = now or now_local()
     today = now.date()
@@ -73,10 +115,14 @@ def recalculate_room_status(db: Session, room_id: int) -> None:
     if stay:
         if stay_should_occupy(stay):
             room.status = RoomStatus.occupied
-        elif room.status == RoomStatus.occupied:
-            # Early check-in by admin — keep occupied until checkout.
+        elif (
+            room.status == RoomStatus.occupied
+            and stay_check_in_date(stay) == today_local()
+        ):
+            # Early check-in on the check-in day (before 13:00) — keep occupied.
             pass
         else:
+            # Future booking — not in the room yet.
             room.status = RoomStatus.booked
     elif room.status == RoomStatus.occupied:
         room.status = RoomStatus.cleaning
@@ -89,20 +135,16 @@ def recalculate_room_status(db: Session, room_id: int) -> None:
 
 
 def apply_due_checkins(db: Session) -> int:
-    """Promote booked rooms to occupied when check-in time has arrived.
-
-    Safe to call on every rooms list request — only touches rooms that need a change.
+    """Promote booked→occupied when check-in time arrives; demote occupied→booked
+    when the only open stay is still a future booking.
     """
     changed = 0
     candidates = (
         db.query(Room)
-        .filter(Room.status.in_([RoomStatus.booked, RoomStatus.free]))
+        .filter(Room.status.in_([RoomStatus.booked, RoomStatus.free, RoomStatus.occupied]))
         .all()
     )
     for room in candidates:
-        stay = get_active_stay(db, room.id)
-        if not stay:
-            continue
         previous = room.status
         recalculate_room_status(db, room.id)
         if room.status != previous:
@@ -118,28 +160,64 @@ def validate_stay_for_room(
     stay_type: StayType,
     room_id: int,
     client_id: int,
+    check_in: date | None = None,
+    planned_check_out: date | None = None,
     exclude_stay_id: int | None = None,
 ) -> None:
     from fastapi import HTTPException
 
-    active = get_active_stay(db, room_id, exclude_stay_id=exclude_stay_id)
+    open_stays = get_open_stays(db, room_id, exclude_stay_id=exclude_stay_id)
 
-    if stay_type == StayType.booking:
-        if active:
+    if stay_type == StayType.booking or stay_type == StayType.alumni:
+        new_start = check_in
+        new_end = planned_check_out
+        for active in open_stays:
             guest = active.client.full_name
-            if stay_should_occupy(active):
-                detail = f"Номер занят ({guest}). Сначала оформите выезд."
-            else:
-                detail = f"Номер уже забронирован ({guest})."
-            raise HTTPException(status_code=400, detail=detail)
-    elif stay_type == StayType.extension:
-        if not active:
+            existing_start = stay_check_in_date(active)
+            existing_end = stay_period_end(active)
+
+            # Same-day turnover: previous checkout date == new check-in date is OK
+            # (out 12:00, in 13:00). Only block real overlaps.
+            if new_start is not None and periods_overlap(
+                existing_start, existing_end, new_start, new_end
+            ):
+                if stay_should_occupy(active) and (
+                    existing_end is None or new_start < existing_end
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Номер занят ({guest}). Сначала оформите выезд.",
+                    )
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Номер уже занят/забронирован ({guest}) на эти даты. "
+                        f"Выезд в 12:00, заезд с 13:00 — в день выезда можно селить следующего гостя."
+                    ),
+                )
+            if new_start is None and active:
+                # No dates given — keep legacy: block any open stay
+                if stay_should_occupy(active):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Номер занят ({guest}). Сначала оформите выезд.",
+                    )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Номер уже забронирован ({guest}).",
+                )
+        return
+    if stay_type == StayType.extension:
+        occupying = next((s for s in open_stays if stay_should_occupy(s)), None)
+        if not occupying:
             raise HTTPException(
                 status_code=400,
                 detail="Продление возможно только для занятого номера",
             )
-        if active.client_id != client_id:
+        if occupying.client_id != client_id:
             raise HTTPException(
                 status_code=400,
                 detail="Номер занят другим гостем",
             )
+        return
+    raise AssertionError(f"Unhandled stay type: {stay_type}")

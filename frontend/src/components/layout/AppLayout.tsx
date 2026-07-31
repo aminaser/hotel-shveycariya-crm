@@ -4,6 +4,7 @@ import {
   BedDouble,
   BookOpen,
   CalendarDays,
+  CalendarRange,
   ClipboardList,
   ClipboardPenLine,
   FileText,
@@ -14,6 +15,7 @@ import {
   Settings,
   Trash2,
   Users,
+  UtensilsCrossed,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -24,20 +26,22 @@ import type { AppSettings } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { useNewRecordNotifications } from "@/hooks/useNewRecordNotifications";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
-import { useAuthStore } from "@/stores/auth";
+import { useAuthStore, canManageMenu, canViewAnalytics } from "@/stores/auth";
 import { useBadgeStore } from "@/stores/badges";
 import { cn } from "@/lib/utils";
 
 const navItems = [
   { to: "/registry", label: "Журнал", icon: BookOpen },
+  { to: "/bookings", label: "Бронь в отеле", icon: CalendarDays },
   { to: "/rooms", label: "Номера", icon: BedDouble },
   { to: "/spa", label: "Сауна / баня", icon: Flame },
   { to: "/banquets", label: "Банкеты", icon: PartyPopper },
   { to: "/requests", label: "Заявки", icon: ClipboardList },
-  { to: "/calendar", label: "Календарь", icon: CalendarDays },
+  { to: "/calendar", label: "Календарь", icon: CalendarRange },
   { to: "/acts", label: "Акты", icon: FileText },
   { to: "/clients", label: "Клиенты", icon: Users },
   { to: "/timesheet", label: "Табель", icon: ClipboardPenLine },
+  { to: "/menu-settings", label: "Настройки меню", icon: UtensilsCrossed },
   { to: "/settings", label: "Настройки", icon: Settings },
   { to: "/activity", label: "Журнал действий", icon: ScrollText },
   { to: "/analytics", label: "Аналитика", icon: BarChart3 },
@@ -86,7 +90,7 @@ export function AppLayout({ children }: { children?: ReactNode }) {
   const token = useAuthStore((s) => s.token);
 
   const queryClient = useQueryClient();
-  useNewRecordNotifications(navigate);
+  useNewRecordNotifications();
 
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) return;
@@ -106,9 +110,11 @@ export function AppLayout({ children }: { children?: ReactNode }) {
     };
   }, [queryClient]);
 
-  const visibleNavItems = navItems.filter(
-    (item) => item.to !== "/analytics" || user?.role === "owner",
-  );
+  const visibleNavItems = navItems.filter((item) => {
+    if (item.to === "/analytics") return canViewAnalytics(user);
+    if (item.to === "/menu-settings") return canManageMenu(user);
+    return true;
+  });
 
   const { data: settings } = useQuery({
     queryKey: ["settings"],

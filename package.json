@@ -1,6 +1,6 @@
 {
   "name": "hotel-shveycariya-crm",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "private": true,
   "description": "CRM для отеля Швейцария, Текели",
   "main": "electron/main.cjs",
@@ -16,9 +16,19 @@
     "electron:build:win": "npm run prepare:runtime:win && npm run build:frontend && electron-builder --win --x64",
     "install:all": "cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && cd ../frontend && npm install && cd .. && npm install"
   },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
   "build": {
     "appId": "kz.tekeli.hotel.shveycariya.crm",
-    "productName": "Отель Швейцария CRM",
+    "productName": "Hotel Shveycariya CRM",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "aminaser",
+        "repo": "hotel-shveycariya-crm"
+      }
+    ],
     "directories": {
       "output": "release"
     },
@@ -45,25 +55,34 @@
     ],
     "mac": {
       "category": "public.app-category.business",
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "identity": null
     },
     "win": {
+      "executableName": "HotelShveycariyaCRM",
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "language": "1049"
+      "language": "1049",
+      "shortcutName": "Отель Швейцария CRM",
+      "uninstallDisplayName": "Отель Швейцария CRM"
     },
     "afterPack": "./scripts/afterPack.cjs"
   },

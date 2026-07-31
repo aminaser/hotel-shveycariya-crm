@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
-from app.core.permissions import require_owner
 from app.models.banquet import Banquet
 from app.models.client import Client
 from app.models.stay import Stay
@@ -204,9 +203,9 @@ def restore_item(
 @router.delete("/clear", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 def clear_trash(
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_owner),
+    current_user: User = Depends(get_current_user),
 ) -> Response:
-    """Permanently remove soft-deleted CRM records. Owner only."""
+    """Permanently remove all soft-deleted CRM records (entire trash)."""
     stays = db.query(Stay).filter(Stay.deleted_at.isnot(None)).all()
     clients = db.query(Client).filter(Client.deleted_at.isnot(None)).all()
     banquets = db.query(Banquet).filter(Banquet.deleted_at.isnot(None)).all()

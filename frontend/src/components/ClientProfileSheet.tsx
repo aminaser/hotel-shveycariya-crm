@@ -33,6 +33,7 @@ export function ClientProfileSheet({ clientId, onClose }: ClientProfileSheetProp
     iin: "",
     bin: "",
     age: "",
+    date_of_birth: "",
     document_number: "",
     notes: "",
   });
@@ -52,6 +53,7 @@ export function ClientProfileSheet({ clientId, onClose }: ClientProfileSheetProp
         iin: client.iin ?? "",
         bin: client.bin ?? "",
         age: client.age?.toString() ?? "",
+        date_of_birth: client.date_of_birth ?? "",
         document_number: client.document_number ?? "",
         notes: client.notes ?? "",
       });
@@ -59,24 +61,32 @@ export function ClientProfileSheet({ clientId, onClose }: ClientProfileSheetProp
   }, [client]);
 
   const saveMutation = useMutation({
-    mutationFn: () =>
-      apiFetch(`/clients/${clientId}`, {
+    mutationFn: () => {
+      if (!clientId) throw new Error("Клиент не выбран");
+      const name = form.full_name.trim();
+      if (name.length < 2) {
+        throw new ApiError("Укажите ФИО (минимум 2 символа)", 400);
+      }
+      return apiFetch(`/clients/${clientId}`, {
         method: "PATCH",
         body: JSON.stringify({
-          full_name: form.full_name,
-          phone: form.phone || null,
+          full_name: name,
+          phone: form.phone.trim() || null,
           client_type: form.client_type,
           iin: form.client_type === "individual" ? form.iin || null : null,
           bin: form.client_type === "organization" ? form.bin || null : null,
           age: form.age ? parseInt(form.age, 10) : null,
-          document_number: form.document_number || null,
-          notes: form.notes || null,
+          date_of_birth: form.date_of_birth || null,
+          document_number: form.document_number.trim() || null,
+          notes: form.notes.trim() || null,
         }),
-      }),
+      });
+    },
     onSuccess: () => {
-      toast.success("Клиент сохранён");
+      toast.success("Данные клиента сохранены");
       queryClient.invalidateQueries({ queryKey: ["clients"] });
       queryClient.invalidateQueries({ queryKey: ["stays"] });
+      queryClient.invalidateQueries({ queryKey: ["rooms"] });
       queryClient.invalidateQueries({ queryKey: ["client", clientId] });
     },
     onError: (error) => {
@@ -97,7 +107,7 @@ export function ClientProfileSheet({ clientId, onClose }: ClientProfileSheetProp
       >
         <div className="flex items-center justify-between border-b border-border p-4">
           <div>
-            <h2 className="text-lg font-semibold">Карточка клиента</h2>
+            <h2 className="text-lg font-semibold">Редактирование клиента</h2>
             {client && (
               <p className="text-xs text-muted-foreground">
                 Визитов: {client.stays.length}
@@ -115,16 +125,18 @@ export function ClientProfileSheet({ clientId, onClose }: ClientProfileSheetProp
           ) : (
             <div className="space-y-4">
               <div className="space-y-2">
-                <Label>ФИО</Label>
+                <Label htmlFor="client-full-name">ФИО</Label>
                 <Input
+                  id="client-full-name"
                   value={form.full_name}
                   onChange={(e) => setForm({ ...form, full_name: e.target.value })}
                 />
               </div>
               <div className="space-y-2">
-                <Label>Телефон</Label>
+                <Label htmlFor="client-phone">Телефон</Label>
                 <div className="flex gap-2">
                   <Input
+                    id="client-phone"
                     value={form.phone}
                     onChange={(e) => setForm({ ...form, phone: e.target.value })}
                     placeholder="+7 (7XX) XXX-XX-XX"
@@ -167,8 +179,9 @@ export function ClientProfileSheet({ clientId, onClose }: ClientProfileSheetProp
               </div>
               {form.client_type === "individual" ? (
                 <div className="space-y-2">
-                  <Label>ИИН (12 цифр)</Label>
+                  <Label htmlFor="client-iin">ИИН (12 цифр)</Label>
                   <Input
+                    id="client-iin"
                     value={form.iin}
                     onChange={(e) =>
                       setForm({ ...form, iin: e.target.value.replace(/\D/g, "").slice(0, 12) })
@@ -178,8 +191,9 @@ export function ClientProfileSheet({ clientId, onClose }: ClientProfileSheetProp
                 </div>
               ) : (
                 <div className="space-y-2">
-                  <Label>БИН (12 цифр)</Label>
+                  <Label htmlFor="client-bin">БИН (12 цифр)</Label>
                   <Input
+                    id="client-bin"
                     value={form.bin}
                     onChange={(e) =>
                       setForm({ ...form, bin: e.target.value.replace(/\D/g, "").slice(0, 12) })
@@ -188,17 +202,32 @@ export function ClientProfileSheet({ clientId, onClose }: ClientProfileSheetProp
                   />
                 </div>
               )}
-              <div className="space-y-2">
-                <Label>Возраст</Label>
-                <Input
-                  type="number"
-                  value={form.age}
-                  onChange={(e) => setForm({ ...form, age: e.target.value })}
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="client-age">Возраст</Label>
+                  <Input
+                    id="client-age"
+                    type="number"
+                    min={0}
+                    max={150}
+                    value={form.age}
+                    onChange={(e) => setForm({ ...form, age: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="client-dob">Дата рождения</Label>
+                  <Input
+                    id="client-dob"
+                    type="date"
+                    value={form.date_of_birth}
+                    onChange={(e) => setForm({ ...form, date_of_birth: e.target.value })}
+                  />
+                </div>
               </div>
               <div className="space-y-2">
-                <Label>Документ</Label>
+                <Label htmlFor="client-document">Документ</Label>
                 <Input
+                  id="client-document"
                   value={form.document_number}
                   onChange={(e) =>
                     setForm({ ...form, document_number: e.target.value })
@@ -206,8 +235,10 @@ export function ClientProfileSheet({ clientId, onClose }: ClientProfileSheetProp
                 />
               </div>
               <div className="space-y-2">
-                <Label>Заметки</Label>
-                <Input
+                <Label htmlFor="client-notes">Заметки</Label>
+                <textarea
+                  id="client-notes"
+                  className="flex min-h-[80px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   value={form.notes}
                   onChange={(e) => setForm({ ...form, notes: e.target.value })}
                 />
@@ -215,9 +246,9 @@ export function ClientProfileSheet({ clientId, onClose }: ClientProfileSheetProp
               <Button
                 className="w-full"
                 onClick={() => saveMutation.mutate()}
-                disabled={saveMutation.isPending}
+                disabled={saveMutation.isPending || !form.full_name.trim()}
               >
-                Сохранить
+                {saveMutation.isPending ? "Сохранение..." : "Сохранить изменения"}
               </Button>
 
               {client && client.stays.length > 0 && (

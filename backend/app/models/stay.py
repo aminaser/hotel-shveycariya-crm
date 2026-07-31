@@ -12,6 +12,7 @@ from app.core.database import Base
 class StayType(str, enum.Enum):
     booking = "booking"
     extension = "extension"
+    alumni = "alumni"
 
 
 class PaymentStatus(str, enum.Enum):
@@ -33,13 +34,22 @@ class Stay(Base):
     # and is stored in check_out when staff presses «Выезд».
     planned_check_out: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     check_out: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    # Guests in package (e.g. alumni meeting at fixed price per person).
+    people_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     payment_amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0"), nullable=False
+    )
+    # Amount already received when payment_status is partial.
+    prepayment: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), default=Decimal("0"), nullable=False
     )
     payment_status: Mapped[PaymentStatus] = mapped_column(
         Enum(PaymentStatus), default=PaymentStatus.unpaid, nullable=False
     )
     payment_method: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    payment_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    # Shared id when several rooms were booked together in one journal submit.
+    group_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

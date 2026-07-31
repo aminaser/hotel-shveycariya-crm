@@ -16,6 +16,11 @@ declare global {
     electronAPI?: {
       isElectron: boolean;
       getAppPath: () => Promise<string>;
+      checkForUpdates: () => Promise<{
+        ok: boolean;
+        version?: string | null;
+        reason?: string;
+      }>;
     };
   }
 }
