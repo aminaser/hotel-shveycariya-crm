@@ -1,78 +1,54 @@
 ; Auto-update / reinstall helpers for Windows NSIS.
-; Critical: do NOT rename or delete $INSTDIR here before electron-builder runs
-; uninstallOldVersion — that leaves UninstallString pointing at a missing path
-; and surfaces: "Не удалось удалить старые файлы приложения … : 2"
+;
+; Do NOT run the previous Uninstall.exe when it is broken/locked — that surfaces
+; "Не удалось закрыть … нажмите Повторить" in a loop (electron-builder retries
+; uninstall 5 times, then shows appCannotBeClosed; Retry never resets cleanly).
+; Instead: kill CRM + bundled Python, clear uninstall registry, remove INSTDIR,
+; and let the new installer write a fresh tree.
 
 !macro _KillCrmProcesses
   DetailPrint "Stopping HotelShveycariyaCRM processes..."
 
   nsExec::ExecToLog `taskkill /F /IM HotelShveycariyaCRM.exe /T`
   Pop $0
-  Sleep 400
+  Sleep 300
   nsExec::ExecToLog `taskkill /F /IM HotelShveycariyaCRM.exe /T`
   Pop $0
+  ; Older builds / shortcut display name variants
+  nsExec::ExecToLog `taskkill /F /IM "Hotel Shveycariya CRM.exe" /T`
+  Pop $0
 
-  ; Kill bundled Python/uvicorn holding locks under resources\backend\runtime
-  nsExec::ExecToLog `powershell -NoProfile -ExecutionPolicy Bypass -Command "$$paths = @('HotelShveycariyaCRM','hotel-shveycariya-crm','Shveycariya'); Get-CimInstance Win32_Process -EA SilentlyContinue | ForEach-Object { $$p = $$_; $$hit = $$false; if ($$p.ExecutablePath) { foreach ($$x in $$paths) { if ($$p.ExecutablePath -like ('*' + $$x + '*')) { $$hit = $$true } } }; if (-not $$hit -and $$p.CommandLine) { foreach ($$x in $$paths) { if ($$p.CommandLine -like ('*' + $$x + '*')) { $$hit = $$true } } }; if ($$hit -and $$p.Name -match '^(python(w)?|HotelShveycariyaCRM)\.exe$$') { Stop-Process -Id $$p.ProcessId -Force -EA SilentlyContinue } }" `
+  ; Kill anything whose path or command line lives under our install folders
+  ; (Electron + portable CPython/uvicorn holding file locks).
+  nsExec::ExecToLog `powershell -NoProfile -ExecutionPolicy Bypass -Command "$$needles = @('HotelShveycariyaCRM','hotel-shveycariya-crm','Hotel Shveycariya CRM','Shveycariya'); Get-CimInstance Win32_Process -EA SilentlyContinue | ForEach-Object { $$p = $$_; $$blob = (($$p.ExecutablePath + ' ' + $$p.CommandLine) + ''); foreach ($$n in $$needles) { if ($$blob -like ('*' + $$n + '*')) { Stop-Process -Id $$p.ProcessId -Force -EA SilentlyContinue; break } } }" `
   Pop $0
 !macroend
 
-!macro customCheckAppRunning
-  !insertmacro _KillCrmProcesses
-  Sleep 1500
+!macro _ClearUninstallRegistry
+  ; Skip previous Uninstall.exe — it often fails while Python locks runtime files
+  ; and electron-builder then shows the endless Retry dialog.
+  DetailPrint "Clearing previous uninstall registry (will reinstall in place)..."
+  DeleteRegKey HKCU "${UNINSTALL_REGISTRY_KEY}"
+  DeleteRegKey HKLM "${UNINSTALL_REGISTRY_KEY}"
+  !ifdef UNINSTALL_REGISTRY_KEY_2
+    DeleteRegKey HKCU "${UNINSTALL_REGISTRY_KEY_2}"
+    DeleteRegKey HKLM "${UNINSTALL_REGISTRY_KEY_2}"
+  !endif
+  DeleteRegKey HKCU "${INSTALL_REGISTRY_KEY}"
+  DeleteRegKey HKLM "${INSTALL_REGISTRY_KEY}"
+!macroend
 
-  ; Clear read-only flags only — leave the folder in place for the old uninstaller
+!macro _ForceRemoveInstallDir
   ${if} "$INSTDIR" != ""
     nsExec::ExecToLog `cmd /C if exist "$INSTDIR" attrib -R /S /D "$INSTDIR\*.*"`
     Pop $0
-  ${endif}
-
-  ; Legacy install path (productName with spaces from older builds)
-  nsExec::ExecToLog `cmd /C if exist "%LOCALAPPDATA%\Programs\Hotel Shveycariya CRM" attrib -R /S /D "%LOCALAPPDATA%\Programs\Hotel Shveycariya CRM\*.*"`
-  Pop $0
-  !insertmacro _KillCrmProcesses
-  Sleep 500
-!macroend
-
-; Elevated inner instance also needs process kill (oneClick path).
-!macro customInit
-  !insertmacro _KillCrmProcesses
-!macroend
-
-; If the previous uninstaller still returns non-zero (busy file, partial tree),
-; continue with the new install instead of aborting the whole update.
-!macro customUnInstallCheck
-  ${if} $R0 != 0
-    DetailPrint `Old uninstall exit code: $R0 — continuing with new files`
-  ${endif}
-!macroend
-
-!macro customUnInstallCheckCurrentUser
-  ${if} $R0 != 0
-    DetailPrint `Old uninstall (HKCU) exit code: $R0 — continuing with new files`
-  ${endif}
-!macroend
-
-; More reliable than atomic rename for this app: large portable CPython tree
-; often leaves file locks briefly after Electron exits.
-!macro customRemoveFiles
-  !insertmacro _KillCrmProcesses
-  Sleep 2000
-
-  ${if} "$INSTDIR" != ""
-    nsExec::ExecToLog `cmd /C if exist "$INSTDIR" attrib -R /S /D "$INSTDIR\*.*"`
-    Pop $0
-
     RMDir /r "$INSTDIR"
     ${if} ${FileExists} "$INSTDIR"
-      DetailPrint "Retry remove install dir..."
-      Sleep 1500
-      !insertmacro _KillCrmProcesses
       Sleep 1000
+      !insertmacro _KillCrmProcesses
+      Sleep 800
       RMDir /r "$INSTDIR"
     ${endif}
-
-    ; Last resort: move aside so the new installer can recreate INSTDIR
     ${if} ${FileExists} "$INSTDIR"
       RMDir /r "$INSTDIR.__old"
       ClearErrors
@@ -81,6 +57,48 @@
     ${endif}
   ${endif}
 
+  nsExec::ExecToLog `cmd /C if exist "%LOCALAPPDATA%\Programs\Hotel Shveycariya CRM" attrib -R /S /D "%LOCALAPPDATA%\Programs\Hotel Shveycariya CRM\*.*"`
+  Pop $0
   RMDir /r "$LOCALAPPDATA\Programs\Hotel Shveycariya CRM"
   RMDir /r "$LOCALAPPDATA\Programs\Hotel Shveycariya CRM.__old"
+!macroend
+
+!macro customCheckAppRunning
+  !insertmacro _KillCrmProcesses
+  Sleep 1500
+  !insertmacro _KillCrmProcesses
+  Sleep 800
+
+  !insertmacro _ClearUninstallRegistry
+  !insertmacro _ForceRemoveInstallDir
+
+  !insertmacro _KillCrmProcesses
+  Sleep 500
+!macroend
+
+; Elevated inner instance (UAC) also needs the same cleanup.
+!macro customInit
+  !insertmacro _KillCrmProcesses
+  !insertmacro _ClearUninstallRegistry
+!macroend
+
+; If something still invokes an uninstaller, never abort the update on its exit code.
+!macro customUnInstallCheck
+  ${if} $R0 != 0
+    DetailPrint `Old uninstall exit code: $R0 — continuing with new files`
+    StrCpy $R0 0
+  ${endif}
+!macroend
+
+!macro customUnInstallCheckCurrentUser
+  ${if} $R0 != 0
+    DetailPrint `Old uninstall (HKCU) exit code: $R0 — continuing with new files`
+    StrCpy $R0 0
+  ${endif}
+!macroend
+
+!macro customRemoveFiles
+  !insertmacro _KillCrmProcesses
+  Sleep 1500
+  !insertmacro _ForceRemoveInstallDir
 !macroend

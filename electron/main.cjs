@@ -61,9 +61,19 @@ function stopBackend() {
   }, 800);
 }
 
-/** Kill packaged Python still holding NSIS install files (Windows). */
+/** Kill packaged Electron + Python still holding NSIS install files (Windows). */
 function killPackagedPythonLocks() {
   if (process.platform !== "win32" || isDev) return;
+  try {
+    execFile(
+      "taskkill",
+      ["/F", "/IM", "HotelShveycariyaCRM.exe", "/T"],
+      { windowsHide: true },
+      () => {},
+    );
+  } catch {
+    // ignore
+  }
   try {
     execFile(
       "powershell.exe",
@@ -72,12 +82,18 @@ function killPackagedPythonLocks() {
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        `Get-CimInstance Win32_Process -EA SilentlyContinue | Where-Object {
-          $_.Name -match '^python(w)?\\.exe$' -and (
-            ($_.ExecutablePath -and $_.ExecutablePath -match 'HotelShveycariya|hotel-shveycariya') -or
-            ($_.CommandLine -and $_.CommandLine -match 'HotelShveycariya|hotel-shveycariya')
-          )
-        } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }`,
+        `$needles = @('HotelShveycariyaCRM','hotel-shveycariya-crm','Hotel Shveycariya CRM','Shveycariya');
+Get-CimInstance Win32_Process -EA SilentlyContinue | ForEach-Object {
+  $p = $_; $blob = (($p.ExecutablePath + ' ' + $p.CommandLine) + '');
+  foreach ($n in $needles) {
+    if ($blob -like ('*' + $n + '*')) {
+      if ($p.ProcessId -ne $PID) {
+        Stop-Process -Id $p.ProcessId -Force -EA SilentlyContinue
+      }
+      break
+    }
+  }
+}`,
       ],
       { windowsHide: true },
       () => {},
@@ -359,23 +375,31 @@ function setupAutoUpdater() {
         clearInterval(updateCheckTimer);
         updateCheckTimer = null;
       }
+      try {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.removeAllListeners("close");
+          mainWindow.close();
+        }
+      } catch {
+        // ignore
+      }
       stopBackend();
       killPackagedPythonLocks();
       // Give Windows time to release locks on portable CPython under resources\
-      // before NSIS runs the old uninstaller (error ": 2" = uninstall failed).
+      // before NSIS runs (otherwise CopyFiles / old uninstall hit Retry loops).
       void (async () => {
-        await waitMs(2500);
+        await waitMs(3000);
         killPackagedPythonLocks();
-        await waitMs(800);
+        await waitMs(1000);
         try {
-          // Silent NSIS (/S) + relaunch — avoids the Setup UI that asks to close CRM.
+          // Silent NSIS (/S) + relaunch — avoids interactive "close CRM" UI.
           autoUpdater.quitAndInstall(true, true);
         } catch (error) {
           isInstallingUpdate = false;
           console.error("[updater] quitAndInstall failed:", error);
           dialog.showErrorBox(
             "Обновление",
-            `Не удалось запустить установку.\n\n${error.message || error}\n\nЗакройте CRM полностью и установите Setup с GitHub Releases.`,
+            `Не удалось запустить установку.\n\n${error.message || error}\n\nЗакройте CRM через Диспетчер задач (HotelShveycariyaCRM.exe и python.exe) и установите Setup с GitHub Releases.`,
           );
         }
       })();
