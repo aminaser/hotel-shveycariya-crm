@@ -55,6 +55,10 @@ if [[ "$TARGET" == "win" || "$TARGET" == "windows" ]]; then
     HOST_PIP="$BACKEND/runtime/bin/python3"
   elif [[ -x "$BACKEND/.venv/bin/python" ]]; then
     HOST_PIP="$BACKEND/.venv/bin/python"
+  elif [[ -x "$BACKEND/.venv/Scripts/python.exe" ]]; then
+    HOST_PIP="$BACKEND/.venv/Scripts/python.exe"
+  elif command -v python >/dev/null 2>&1; then
+    HOST_PIP="python"
   else
     HOST_PIP="python3"
   fi

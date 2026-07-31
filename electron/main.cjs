@@ -61,6 +61,36 @@ function stopBackend() {
   }, 800);
 }
 
+/** Kill packaged Python still holding NSIS install files (Windows). */
+function killPackagedPythonLocks() {
+  if (process.platform !== "win32" || isDev) return;
+  try {
+    execFile(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `Get-CimInstance Win32_Process -EA SilentlyContinue | Where-Object {
+          $_.Name -match '^python(w)?\\.exe$' -and (
+            ($_.ExecutablePath -and $_.ExecutablePath -match 'HotelShveycariya|hotel-shveycariya') -or
+            ($_.CommandLine -and $_.CommandLine -match 'HotelShveycariya|hotel-shveycariya')
+          )
+        } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }`,
+      ],
+      { windowsHide: true },
+      () => {},
+    );
+  } catch {
+    // ignore
+  }
+}
+
+function waitMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function getBackendDir() {
   return isDev
     ? path.join(__dirname, "..", "backend")
@@ -330,8 +360,13 @@ function setupAutoUpdater() {
         updateCheckTimer = null;
       }
       stopBackend();
-      // Let Windows release file locks on python/runtime before NSIS runs.
-      setTimeout(() => {
+      killPackagedPythonLocks();
+      // Give Windows time to release locks on portable CPython under resources\
+      // before NSIS runs the old uninstaller (error ": 2" = uninstall failed).
+      void (async () => {
+        await waitMs(2500);
+        killPackagedPythonLocks();
+        await waitMs(800);
         try {
           // Silent NSIS (/S) + relaunch — avoids the Setup UI that asks to close CRM.
           autoUpdater.quitAndInstall(true, true);
@@ -343,7 +378,7 @@ function setupAutoUpdater() {
             `Не удалось запустить установку.\n\n${error.message || error}\n\nЗакройте CRM полностью и установите Setup с GitHub Releases.`,
           );
         }
-      }, 700);
+      })();
     }
   });
 
