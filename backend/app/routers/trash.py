@@ -11,10 +11,10 @@ from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.models.banquet import Banquet
 from app.models.client import Client
-from app.models.stay import Stay
+from app.models.stay import Stay, StayType
 from app.models.user import User
 from app.services.audit import log_activity, set_updated_by
-from app.services.room_service import get_active_stay, recalculate_room_status
+from app.services.room_service import recalculate_room_status, validate_stay_for_room
 
 router = APIRouter(prefix="/trash", tags=["trash"])
 
@@ -115,15 +115,21 @@ def restore_item(
         if not stay:
             raise HTTPException(status_code=404, detail="Запись не найдена в корзине")
         if stay.check_out is None:
-            active = get_active_stay(db, stay.room_id)
-            if active:
-                room_number = stay.room.number if stay.room else "?"
-                guest = active.client.full_name if active.client else "другой гость"
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Номер {room_number} сейчас занят ({guest}) — "
-                    "восстановить активное проживание нельзя",
-                )
+            # Same rules as create: half-open days, checkout 12:00 / check-in 13:00.
+            stay_type = (
+                StayType(stay.stay_type)
+                if not isinstance(stay.stay_type, StayType)
+                else stay.stay_type
+            )
+            validate_stay_for_room(
+                db,
+                stay_type=stay_type,
+                room_id=stay.room_id,
+                client_id=stay.client_id,
+                check_in=stay.check_in or stay.record_date,
+                planned_check_out=stay.planned_check_out,
+                exclude_stay_id=stay.id,
+            )
         deleted_at = stay.deleted_at
         stay.deleted_at = None
         set_updated_by(stay, current_user)

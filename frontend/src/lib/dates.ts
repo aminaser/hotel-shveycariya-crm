@@ -1,5 +1,6 @@
 const ALMATY_TZ = "Asia/Almaty";
 const CHECK_IN_HOUR = 13;
+const CHECK_OUT_HOUR = 12;
 
 /** YYYY-MM-DD in hotel timezone (Текели / Asia/Almaty). */
 export function todayLocal(): string {
@@ -34,16 +35,21 @@ export function isActiveStay(checkOut: string | null | undefined): boolean {
 /**
  * Guest is physically in the room now.
  * Future check-in → false (бронь). Check-in today → only from 13:00.
+ * Planned checkout day from 12:00 → false (номер свободен под следующего гостя).
  */
 export function isGuestInRoom(
   checkOut: string | null | undefined,
   checkIn?: string | null,
   stayType?: string | null,
+  plannedCheckOut?: string | null,
 ): boolean {
   if (checkOut) return false;
+  const today = todayLocal();
+  if (plannedCheckOut && plannedCheckOut === today && hourLocal() >= CHECK_OUT_HOUR) {
+    return false;
+  }
   if (stayType === "extension") return true;
   if (!checkIn) return true;
-  const today = todayLocal();
   if (checkIn > today) return false;
   if (checkIn < today) return true;
   return hourLocal() >= CHECK_IN_HOUR;

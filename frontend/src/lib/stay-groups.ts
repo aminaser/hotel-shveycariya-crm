@@ -135,7 +135,12 @@ export function groupStays(stays: Stay[]): StayGroup[] {
       totalPrepayment,
       paymentStatus: groupPaymentStatus(members),
       anyInRoom: members.some((s) =>
-        isGuestInRoom(s.check_out, s.check_in ?? s.record_date, s.stay_type),
+        isGuestInRoom(
+          s.check_out,
+          s.check_in ?? s.record_date,
+          s.stay_type,
+          s.planned_check_out,
+        ),
       ),
       anyBookedFuture: members.some((s) =>
         isFutureBooking(s.check_out, s.check_in ?? s.record_date),

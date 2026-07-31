@@ -71,27 +71,54 @@ def get_open_stays(
 
 
 def get_active_stay(db: Session, room_id: int, exclude_stay_id: int | None = None) -> Stay | None:
-    """Stay that currently drives room status (prefer occupied over future booking)."""
+    """Stay that currently drives room status (prefer occupied over future booking).
+
+    Stays past planned checkout (from 12:00) no longer drive status — room can
+    go free/cleaning while the record awaits formal checkout.
+    """
     open_stays = get_open_stays(db, room_id, exclude_stay_id=exclude_stay_id)
     if not open_stays:
         return None
     occupying = [s for s in open_stays if stay_should_occupy(s)]
     if occupying:
         return occupying[0]
-    return open_stays[0]
+    today = today_local()
+    future = [s for s in open_stays if stay_check_in_date(s) > today]
+    if future:
+        return future[0]
+    pending_today = [
+        s
+        for s in open_stays
+        if stay_check_in_date(s) == today
+        and not (
+            s.planned_check_out is not None
+            and s.planned_check_out == today
+            and now_local().hour >= CHECK_OUT_HOUR
+        )
+    ]
+    if pending_today:
+        return pending_today[0]
+    return None
 
 
 def stay_should_occupy(stay: Stay, now: datetime | None = None) -> bool:
     """Whether an open stay should make the room occupied (vs booked).
 
     Rules:
-    - extension → always occupied
+    - extension → occupied until planned checkout day 12:00 (same as booking)
     - check-in date in the past → occupied
     - check-in date in the future → booked
     - check-in date is today → occupied only from 13:00 (Asia/Almaty)
+    - planned checkout day from 12:00 → room freed for next guest (even without
+      formal checkout yet); date ranges use half-open [check_in, checkout)
     """
     now = now or now_local()
     today = now.date()
+
+    planned_out = stay.planned_check_out
+    if planned_out is not None and planned_out == today and now.hour >= CHECK_OUT_HOUR:
+        # Выезд до 12:00 — после полудня номер свободен под заезд с 13:00.
+        return False
 
     if stay.stay_type == StayType.extension:
         return True
