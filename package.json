@@ -1,6 +1,6 @@
 {
   "name": "hotel-shveycariya-crm",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "description": "CRM для отеля Швейцария, Текели",
   "main": "electron/main.cjs",
@@ -82,7 +82,8 @@
       "allowToChangeInstallationDirectory": true,
       "language": "1049",
       "shortcutName": "Отель Швейцария CRM",
-      "uninstallDisplayName": "Отель Швейцария CRM"
+      "uninstallDisplayName": "Отель Швейцария CRM",
+      "include": "build/installer.nsh"
     },
     "afterPack": "./scripts/afterPack.cjs"
   },
