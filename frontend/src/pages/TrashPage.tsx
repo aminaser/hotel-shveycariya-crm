@@ -71,10 +71,11 @@ async function fetchRequestsTrash(): Promise<GuestRequest[]> {
 }
 
 async function purgeSupabaseTable(table: "spa_bookings" | "requests"): Promise<void> {
-  if (!supabase) return;
+  const client = supabase;
+  if (!client) return;
 
   const selectTrashIds = async (): Promise<string[]> => {
-    let query = supabase.from(table).select("id").not("deleted_at", "is", null);
+    let query = client.from(table).select("id").not("deleted_at", "is", null);
     query =
       table === "requests"
         ? query.or("source.is.null,source.neq.__purged__")
@@ -91,14 +92,14 @@ async function purgeSupabaseTable(table: "spa_bookings" | "requests"): Promise<v
   for (let i = 0; i < ids.length; i += chunkSize) {
     const chunk = ids.slice(i, i + chunkSize);
     // Prefer hard delete when RLS allows it (spa_bookings).
-    const { error: deleteError } = await supabase.from(table).delete().in("id", chunk);
+    const { error: deleteError } = await client.from(table).delete().in("id", chunk);
     if (deleteError) {
       // requests table historically had no DELETE policy — hide via UPDATE instead.
       const patch =
         table === "requests"
           ? { source: "__purged__" }
           : { notes: "__PURGED__" };
-      const { error: updateError } = await supabase
+      const { error: updateError } = await client
         .from(table)
         .update(patch)
         .in("id", chunk);
@@ -117,7 +118,7 @@ async function purgeSupabaseTable(table: "spa_bookings" | "requests"): Promise<v
         table === "requests"
           ? { source: "__purged__" }
           : { notes: "__PURGED__" };
-      const { error: updateError } = await supabase
+      const { error: updateError } = await client
         .from(table)
         .update(patch)
         .in("id", chunk);
