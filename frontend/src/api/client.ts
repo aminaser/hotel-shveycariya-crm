@@ -73,6 +73,9 @@ export async function apiFetch<T>(
     } catch {
       // ignore
     }
+    if (response.status === 404 && (!message || /^not found$/i.test(message))) {
+      message = "Не найдено";
+    }
     handleUnauthorized(path, response.status);
     throw new ApiError(message, response.status);
   }

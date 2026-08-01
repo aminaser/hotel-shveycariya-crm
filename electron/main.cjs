@@ -1,6 +1,10 @@
 const { app, BrowserWindow, ipcMain, dialog } = require("electron");
-const { autoUpdater } = require("electron-updater");
 const { spawn, execFile } = require("child_process");
+// Lazy-load electron-updater: top-level require crashes when app isn't ready
+// (and in some Electron/dev launches before the runtime is fully wired).
+function getAutoUpdater() {
+  return require("electron-updater").autoUpdater;
+}
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
@@ -312,35 +316,58 @@ async function createWindow() {
   });
 }
 
-ipcMain.handle("get-app-path", () => app.getPath("userData"));
-ipcMain.handle("relaunch-app", () => {
-  // Full process restart so SQLite reopens the restored DB file.
-  isInstallingUpdate = true;
-  stopBackend();
-  app.relaunch();
-  app.exit(0);
-});
-ipcMain.handle("check-for-updates", async () => {
-  if (isDev || isPortable) {
-    return { ok: false, reason: "updates_unavailable" };
-  }
-  try {
-    const result = await autoUpdater.checkForUpdates();
-    return {
-      ok: true,
-      version: result?.updateInfo?.version ?? null,
-    };
-  } catch (error) {
-    console.error("[updater]", error);
-    return { ok: false, reason: error.message || String(error) };
-  }
-});
+function registerIpcHandlers() {
+  ipcMain.removeHandler("get-app-path");
+  ipcMain.handle("get-app-path", () => app.getPath("userData"));
+
+  ipcMain.removeHandler("relaunch-app");
+  ipcMain.handle("relaunch-app", async () => {
+    // Dev (electron:dev): vite/backend run under concurrently -k. Exiting Electron
+    // would SIGTERM them and leave ports dead. Soft-reload the window instead.
+    if (isDev || process.env.SKIP_BACKEND === "1") {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.reloadIgnoringCache();
+      }
+      return { ok: true, soft: true };
+    }
+    // Packaged: full process restart so SQLite reopens the restored DB file.
+    // Defer exit so the invoke reply can reach the renderer.
+    isInstallingUpdate = true;
+    stopBackend();
+    setImmediate(() => {
+      app.relaunch();
+      app.exit(0);
+    });
+    return { ok: true };
+  });
+
+  ipcMain.removeHandler("check-for-updates");
+  ipcMain.handle("check-for-updates", async () => {
+    if (isDev || isPortable) {
+      return { ok: false, reason: "updates_unavailable" };
+    }
+    try {
+      const autoUpdater = getAutoUpdater();
+      const result = await autoUpdater.checkForUpdates();
+      return {
+        ok: true,
+        version: result?.updateInfo?.version ?? null,
+      };
+    } catch (error) {
+      console.error("[updater]", error);
+      return { ok: false, reason: error.message || String(error) };
+    }
+  });
+}
+
+registerIpcHandlers();
 
 function setupAutoUpdater() {
   if (isDev || isPortable) {
     return;
   }
 
+  const autoUpdater = getAutoUpdater();
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.logger = {
@@ -409,6 +436,8 @@ function setupAutoUpdater() {
 
 app.whenReady().then(async () => {
   try {
+    // Re-register in case main was reloaded without a full process restart.
+    registerIpcHandlers();
     if (process.env.SKIP_BACKEND !== "1") {
       startBackend();
     }

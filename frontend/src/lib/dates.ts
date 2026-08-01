@@ -1,6 +1,6 @@
 const ALMATY_TZ = "Asia/Almaty";
-const CHECK_IN_HOUR = 13;
 const CHECK_OUT_HOUR = 12;
+const CHECK_IN_HOUR = 13;
 
 /** YYYY-MM-DD in hotel timezone (Текели / Asia/Almaty). */
 export function todayLocal(): string {
@@ -22,6 +22,16 @@ export function isCheckoutToday(checkOut: string | null | undefined): boolean {
   return checkOut === todayLocal();
 }
 
+/** Planned checkout date has passed (or today from 12:00) — room free for turnover. */
+export function isReleasedByCheckout(
+  plannedCheckOut: string | null | undefined,
+): boolean {
+  if (!plannedCheckOut) return false;
+  const today = todayLocal();
+  if (plannedCheckOut < today) return true;
+  return plannedCheckOut === today && hourLocal() >= CHECK_OUT_HOUR;
+}
+
 /** Open stay (not checked out yet) — may still be a future booking. */
 export function isOpenStay(checkOut: string | null | undefined): boolean {
   return !checkOut;
@@ -34,35 +44,82 @@ export function isActiveStay(checkOut: string | null | undefined): boolean {
 
 /**
  * Guest is physically in the room now.
- * Future check-in → false (бронь). Check-in today → only from 13:00.
- * Planned checkout day from 12:00 → false (номер свободен под следующего гостя).
+ * - formal checkout / released by planned checkout → false
+ * - extension → true until released
+ * - booking/alumni → checked_in_at required; on check-in day only after 13:00
  */
 export function isGuestInRoom(
   checkOut: string | null | undefined,
   checkIn?: string | null,
   stayType?: string | null,
   plannedCheckOut?: string | null,
+  options?: { checkedInAt?: string | null; inRoom?: boolean | null },
 ): boolean {
   if (checkOut) return false;
-  const today = todayLocal();
-  if (plannedCheckOut && plannedCheckOut === today && hourLocal() >= CHECK_OUT_HOUR) {
-    return false;
-  }
+  if (isReleasedByCheckout(plannedCheckOut)) return false;
   if (stayType === "extension") return true;
-  if (!checkIn) return true;
-  if (checkIn > today) return false;
-  if (checkIn < today) return true;
-  return hourLocal() >= CHECK_IN_HOUR;
+  if (!options?.checkedInAt) return false;
+
+  const today = todayLocal();
+  const ci = checkIn || null;
+  if (ci && ci > today) return false;
+  if (ci && ci === today && hourLocal() < CHECK_IN_HOUR) return false;
+  return true;
 }
 
-/** Open stay with check-in still in the future (бронь, ещё не заселились). */
+/** Open stay awaiting arrival / before 13:00 on check-in day. */
 export function isFutureBooking(
   checkOut: string | null | undefined,
   checkIn?: string | null,
+  options?: {
+    checkedInAt?: string | null;
+    inRoom?: boolean | null;
+    plannedCheckOut?: string | null;
+    stayType?: string | null;
+  },
 ): boolean {
   if (checkOut) return false;
-  if (!checkIn) return false;
-  return checkIn > todayLocal();
+  if (isReleasedByCheckout(options?.plannedCheckOut)) return false;
+  if (options?.stayType === "extension") return false;
+  if (
+    isGuestInRoom(checkOut, checkIn, options?.stayType, options?.plannedCheckOut, {
+      checkedInAt: options?.checkedInAt,
+      inRoom: options?.inRoom,
+    })
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/** Planned or formal departure date (YYYY-MM-DD). */
+export function stayDepartureDate(
+  checkOut?: string | null,
+  plannedCheckOut?: string | null,
+): string | null {
+  return checkOut || plannedCheckOut || null;
+}
+
+/**
+ * Free-room badge for journal:
+ * - departure day (from 12:00 or after formal checkout) → free_from_noon («Свободен с 12:00»)
+ * - after departure day → free («Свободен»)
+ * - otherwise null (still occupied / before checkout day)
+ */
+export function freeRoomBadgeKind(
+  checkOut?: string | null,
+  plannedCheckOut?: string | null,
+): "free_from_noon" | "free" | null {
+  const dep = stayDepartureDate(checkOut, plannedCheckOut);
+  if (!dep) return null;
+  const today = todayLocal();
+  if (dep > today) return null;
+  if (dep === today) {
+    if (checkOut) return "free_from_noon";
+    if (hourLocal() >= CHECK_OUT_HOUR) return "free_from_noon";
+    return null;
+  }
+  return "free";
 }
 
 /** Number of paid nights between check-in and check-out (min 1). */

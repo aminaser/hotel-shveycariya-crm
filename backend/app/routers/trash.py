@@ -12,15 +12,23 @@ from app.core.deps import get_current_user
 from app.core.permissions import require_owner
 from app.models.banquet import Banquet
 from app.models.client import Client
+from app.models.guest_service import GuestService
 from app.models.stay import Stay, StayType
 from app.models.takeaway_order import TakeawayOrder
 from app.models.user import User
 from app.services.audit import log_activity, set_updated_by
 from app.services.room_service import recalculate_room_status, validate_stay_for_room
+from app.services.supabase_crm_sync import (
+    ensure_cloud_id,
+    soft_delete_banquet,
+    soft_delete_takeaway,
+    upsert_banquet,
+    upsert_takeaway,
+)
 
 router = APIRouter(prefix="/trash", tags=["trash"])
 
-TrashType = Literal["stay", "client", "banquet", "takeaway"]
+TrashType = Literal["stay", "client", "banquet", "takeaway", "guest_service"]
 
 
 class TrashItem(BaseModel):
@@ -38,6 +46,12 @@ class TrashRestoreRequest(BaseModel):
 
 def _fmt(d) -> str:
     return d.strftime("%d.%m.%Y") if d else ""
+
+
+GUEST_SERVICE_LABELS = {
+    "laundry_hotel": "Стирка (порошок гостиницы)",
+    "laundry_own": "Стирка (свой порошок)",
+}
 
 
 @router.get("", response_model=list[TrashItem])
@@ -106,6 +120,20 @@ def list_trash(
                 title=f"На вынос: {order.guest_name}",
                 subtitle=_fmt(order.order_date),
                 deleted_at=order.deleted_at,
+            )
+        )
+
+    guest_services = db.query(GuestService).filter(GuestService.deleted_at.isnot(None)).all()
+    for row in guest_services:
+        label = GUEST_SERVICE_LABELS.get(row.service_type, row.service_type)
+        room = f" · №{row.room_number}" if row.room_number else ""
+        items.append(
+            TrashItem(
+                type="guest_service",
+                id=row.id,
+                title=f"{label}: {row.guest_name}{room}",
+                subtitle=_fmt(row.service_date),
+                deleted_at=row.deleted_at,
             )
         )
 
@@ -203,6 +231,7 @@ def restore_item(
             raise HTTPException(status_code=404, detail="Бронирование не найдено в корзине")
         deleted_at = banquet.deleted_at
         banquet.deleted_at = None
+        ensure_cloud_id(banquet)
         set_updated_by(banquet, current_user)
         log_activity(
             db,
@@ -213,6 +242,7 @@ def restore_item(
             entity_label=banquet.guest_name,
         )
         db.commit()
+        upsert_banquet(banquet)
         return TrashItem(
             type="banquet",
             id=banquet.id,
@@ -230,6 +260,7 @@ def restore_item(
             raise HTTPException(status_code=404, detail="Заказ не найден в корзине")
         deleted_at = order.deleted_at
         order.deleted_at = None
+        ensure_cloud_id(order)
         set_updated_by(order, current_user)
         log_activity(
             db,
@@ -240,10 +271,40 @@ def restore_item(
             entity_label=order.guest_name,
         )
         db.commit()
+        upsert_takeaway(order)
         return TrashItem(
             type="takeaway",
             id=order.id,
             title=f"На вынос: {order.guest_name}",
+            deleted_at=deleted_at,
+        )
+
+    if payload.type == "guest_service":
+        row = (
+            db.query(GuestService)
+            .filter(GuestService.id == payload.id, GuestService.deleted_at.isnot(None))
+            .first()
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Услуга не найдена в корзине")
+        deleted_at = row.deleted_at
+        row.deleted_at = None
+        set_updated_by(row, current_user)
+        label = GUEST_SERVICE_LABELS.get(row.service_type, row.service_type)
+        log_activity(
+            db,
+            user=current_user,
+            action="Восстановила услугу для гостя из корзины",
+            entity_type="guest_service",
+            entity_id=row.id,
+            entity_label=f"{label}: {row.guest_name}",
+        )
+        db.commit()
+        room = f" · №{row.room_number}" if row.room_number else ""
+        return TrashItem(
+            type="guest_service",
+            id=row.id,
+            title=f"{label}: {row.guest_name}{room}",
             deleted_at=deleted_at,
         )
 
@@ -260,6 +321,7 @@ def clear_trash(
     clients = db.query(Client).filter(Client.deleted_at.isnot(None)).all()
     banquets = db.query(Banquet).filter(Banquet.deleted_at.isnot(None)).all()
     takeaways = db.query(TakeawayOrder).filter(TakeawayOrder.deleted_at.isnot(None)).all()
+    guest_services = db.query(GuestService).filter(GuestService.deleted_at.isnot(None)).all()
 
     # Delete stays first so client FK references do not block hard-delete.
     for stay in stays:
@@ -274,12 +336,23 @@ def clear_trash(
         db.delete(client)
 
     for banquet in banquets:
+        ensure_cloud_id(banquet)
+        banquet.deleted_at = banquet.deleted_at or datetime.utcnow()
+        soft_delete_banquet(banquet)
         db.delete(banquet)
 
     for order in takeaways:
+        ensure_cloud_id(order)
+        order.deleted_at = order.deleted_at or datetime.utcnow()
+        soft_delete_takeaway(order)
         db.delete(order)
 
-    count = len(stays) + len(clients) + len(banquets) + len(takeaways)
+    for row in guest_services:
+        db.delete(row)
+
+    count = (
+        len(stays) + len(clients) + len(banquets) + len(takeaways) + len(guest_services)
+    )
     log_activity(
         db,
         user=current_user,

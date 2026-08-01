@@ -15,8 +15,22 @@ export function cloneMenu(tabs: MenuTab[]): MenuTab[] {
   return structuredClone(tabs);
 }
 
+const PINNED_TAB_IDS = ["as", "pominki", "complex-lunch"] as const;
+
+/** Keep «Ас», «Поминки» and «Комплексный обед» first; use built-in catalog for those tabs. */
+function ensurePinnedTabsFirst(tabs: MenuTab[]): MenuTab[] {
+  const pinned = PINNED_TAB_IDS.map((id) =>
+    defaultRestaurantMenu.find((t) => t.id === id),
+  ).filter((t): t is MenuTab => Boolean(t));
+  if (pinned.length === 0) return tabs;
+
+  const pinnedIds = new Set(pinned.map((t) => t.id));
+  const rest = tabs.filter((t) => !pinnedIds.has(t.id));
+  return [...pinned.map((t) => structuredClone(t)), ...rest];
+}
+
 export function resolveRestaurantMenu(tabs: MenuTab[] | null | undefined): MenuTab[] {
-  if (tabs && tabs.length > 0) return tabs;
+  if (tabs && tabs.length > 0) return ensurePinnedTabsFirst(tabs);
   return defaultRestaurantMenu;
 }
 

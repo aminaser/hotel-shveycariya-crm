@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil } from "lucide-react";
 import { useEffect, useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { apiFetch, ApiError } from "@/api/client";
 import type { Client, Room, RoomStatus } from "@/api/types";
@@ -24,10 +24,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatDate, roomStatusLabel } from "@/lib/format";
+import { hourLocal, todayLocal } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import { canManagePrices, useAuthStore } from "@/stores/auth";
 
 const STATUS_OPTIONS: RoomStatus[] = ["occupied", "free", "cleaning", "booked", "maintenance"];
+const CHECK_IN_HOUR = 13;
 
 const statusBadgeClass: Record<RoomStatus, string> = {
   occupied: "bg-red-100 text-red-800",
@@ -183,7 +185,16 @@ export function RoomsPage() {
       }
       const checkInDate = form.checkInAt
         ? form.checkInAt.slice(0, 10)
-        : new Date().toISOString().slice(0, 10);
+        : todayLocal();
+      const today = todayLocal();
+      if (checkInDate > today) {
+        toast.error("Дата заезда ещё не наступила");
+        throw new Error("validation");
+      }
+      if (checkInDate === today && hourLocal() < CHECK_IN_HOUR) {
+        toast.error(`Статус «в номере» можно поставить с ${CHECK_IN_HOUR}:00 в день заезда`);
+        throw new Error("validation");
+      }
 
       const client = await apiFetch<Client>("/clients", {
         method: "POST",
@@ -194,7 +205,7 @@ export function RoomsPage() {
         }),
       });
 
-      return apiFetch("/stays", {
+      const stay = await apiFetch<{ id: number }>("/stays", {
         method: "POST",
         body: JSON.stringify({
           client_id: client.id,
@@ -211,6 +222,11 @@ export function RoomsPage() {
           notes: `Заселение: ${formatDateTime(form.checkInAt) ?? ""}`.trim() || null,
         }),
       });
+      await apiFetch(`/rooms/${checkInRoom.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "occupied" }),
+      });
+      return stay;
     },
     onSuccess: () => {
       toast.success(`Гость заселён в №${checkInRoom?.number}`);
@@ -226,6 +242,18 @@ export function RoomsPage() {
 
   const onStatusChange = (room: Room, status: RoomStatus) => {
     if (status === room.status) return;
+    if (status === "occupied") {
+      const checkIn = room.check_in || todayLocal();
+      const today = todayLocal();
+      if (checkIn > today) {
+        toast.error("Дата заезда ещё не наступила");
+        return;
+      }
+      if (checkIn === today && hourLocal() < CHECK_IN_HOUR) {
+        toast.error(`Статус «в номере» можно поставить с ${CHECK_IN_HOUR}:00 в день заезда`);
+        return;
+      }
+    }
     // Walk-in check-in: no guest linked yet → open form.
     if (status === "occupied" && !room.current_guest) {
       setForm({ guestName: "", phone: "", iin: "", checkInAt: nowLocalInputValue() });
@@ -238,7 +266,7 @@ export function RoomsPage() {
         onSuccess: () => {
           invalidate();
           if (status === "occupied" && room.status === "booked" && room.current_guest) {
-            toast.success(`Раннее заселение: ${room.current_guest} · №${room.number}`);
+            toast.success(`Гость в номере: ${room.current_guest} · №${room.number}`);
           } else {
             toast.success("Статус обновлён");
           }
@@ -327,12 +355,15 @@ export function RoomsPage() {
                           {room.guest_phone ?? "телефон не указан"}
                         </div>
                         <div className="text-xs">
-                          {room.status === "booked" ? "Бронь / заезд" : "Заселение"}:{" "}
+                          {room.status === "booked" ? "Заселение в 13:00" : "Заселение"}:{" "}
                           <span className="font-medium">
                             {room.check_in ? formatDate(room.check_in) : "—"}
                           </span>
                           {room.status === "booked" ? (
-                            <span className="text-muted-foreground"> · авто после 13:00</span>
+                            <span className="text-muted-foreground">
+                              {" "}
+                              · бронь → занят
+                            </span>
                           ) : (
                             <>
                               {" · "}

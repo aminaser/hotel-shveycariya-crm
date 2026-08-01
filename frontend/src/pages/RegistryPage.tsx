@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, Pencil } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { apiFetch, ApiError } from "@/api/client";
 import type { Client, RegistrySummary, Room, Stay, StayType, PaymentStatus } from "@/api/types";
@@ -500,7 +500,10 @@ export function RegistryPage() {
           ? alumniAmount(people)
           : null;
       const multi = roomIds.length > 1;
-      const groupId = multi ? newGroupId() : null;
+      // Always link alumni (and multi-room) stays with an explicit group_id —
+      // never merge by client name/dates (that wrongly glued «Алтын» onto other rooms).
+      const groupId =
+        form.stay_type === "alumni" || multi ? newGroupId() : null;
       // Lowest selected room holds package / prepayment (stable, not API order).
       const primaryRoomId =
         multi || packageTotal != null
@@ -598,10 +601,18 @@ export function RegistryPage() {
       const removed = originalRoomIds.filter((id) => !selected.includes(id));
 
       let groupId = editStay.group_id;
-      if (selected.length > 1 && !groupId) {
+      if (
+        (snap.stay_type === "alumni" || selected.length > 1) &&
+        !groupId
+      ) {
         groupId = newGroupId();
       }
-      if (selected.length === 1 && added.length === 0 && removed.length === 0) {
+      if (
+        selected.length === 1 &&
+        snap.stay_type !== "alumni" &&
+        added.length === 0 &&
+        removed.length === 0
+      ) {
         groupId = editStay.group_id;
       }
 
@@ -843,7 +854,9 @@ export function RegistryPage() {
           : null;
       const multi = group.length > 1;
       const groupId =
-        multi && !payStay.group_id ? newGroupId() : payStay.group_id;
+        (payStay.stay_type === "alumni" || multi) && !payStay.group_id
+          ? newGroupId()
+          : payStay.group_id;
       const payPrimary = pickPaymentWriteTarget(group);
 
       const patchOne = async (s: Stay, isPrimary: boolean) => {
@@ -1108,7 +1121,7 @@ export function RegistryPage() {
                     )}
                     {!group.anyInRoom && group.anyBookedFuture && (
                       <Badge variant="default" className="mt-1 text-[10px]">
-                        Бронь
+                        Заселение в 13:00
                       </Badge>
                     )}
                     {group.anyCheckoutToday && group.anyInRoom && (
@@ -1116,14 +1129,14 @@ export function RegistryPage() {
                         Выезд сегодня
                       </Badge>
                     )}
-                    {group.anyCheckoutToday && !group.anyInRoom && !group.allCheckedOut && (
+                    {!group.anyInRoom && group.anyFreeFromNoon && (
                       <Badge variant="success" className="mt-1 text-[10px]">
                         Свободен с 12:00
                       </Badge>
                     )}
-                    {group.allCheckedOut && (
-                      <Badge variant="muted" className="mt-1 text-[10px]">
-                        Выехал
+                    {!group.anyInRoom && group.anyFree && !group.anyFreeFromNoon && (
+                      <Badge variant="success" className="mt-1 text-[10px]">
+                        Свободен
                       </Badge>
                     )}
                   </td>

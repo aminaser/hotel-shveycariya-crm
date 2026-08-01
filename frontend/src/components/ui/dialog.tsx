@@ -11,7 +11,7 @@ export const DialogClose = DialogPrimitive.Close;
 export function DialogContent({
   className,
   children,
-  closeOnOutsideClick = true,
+  closeOnOutsideClick = false,
   onPointerDownOutside,
   onInteractOutside,
   onEscapeKeyDown,

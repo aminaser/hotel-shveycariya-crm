@@ -11,6 +11,7 @@ import {
   Flame,
   LogOut,
   PartyPopper,
+  RefreshCw,
   ScrollText,
   Settings,
   ShoppingBag,
@@ -20,7 +21,8 @@ import {
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { toast } from "@/lib/toast";
 
 import { apiFetch } from "@/api/client";
 import type { AppSettings } from "@/api/types";
@@ -90,6 +92,7 @@ export function AppLayout({ children }: { children?: ReactNode }) {
   const logout = useAuthStore((s) => s.logout);
   const user = useAuthStore((s) => s.user);
   const token = useAuthStore((s) => s.token);
+  const [restarting, setRestarting] = useState(false);
 
   const queryClient = useQueryClient();
   useNewRecordNotifications();
@@ -105,6 +108,12 @@ export function AppLayout({ children }: { children?: ReactNode }) {
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "spa_bookings" }, () => {
         void queryClient.invalidateQueries({ queryKey: ["bg-spa-bookings"] });
         void queryClient.invalidateQueries({ queryKey: ["spa-bookings"] });
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "crm_banquets" }, () => {
+        void queryClient.invalidateQueries({ queryKey: ["banquets"] });
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "crm_takeaway_orders" }, () => {
+        void queryClient.invalidateQueries({ queryKey: ["takeaway-orders"] });
       })
       .subscribe();
     return () => {
@@ -135,6 +144,25 @@ export function AppLayout({ children }: { children?: ReactNode }) {
     navigate("/login");
   };
 
+  const handleRestart = async () => {
+    if (restarting) return;
+    setRestarting(true);
+    try {
+      if (window.electronAPI?.relaunchApp) {
+        toast.success("Перезапуск приложения…");
+        await window.electronAPI.relaunchApp();
+        return;
+      }
+      window.location.reload();
+    } catch (error) {
+      console.error("relaunch-app failed:", error);
+      setRestarting(false);
+      toast.error(
+        "Не удалось перезапустить. Закройте CRM полностью и откройте снова.",
+      );
+    }
+  };
+
   return (
     <div className="flex min-h-screen">
       <aside className="flex w-60 flex-col border-r border-border bg-primary text-white">
@@ -148,7 +176,16 @@ export function AppLayout({ children }: { children?: ReactNode }) {
             <NavBadgeLink key={to} to={to} label={label} Icon={Icon} />
           ))}
         </nav>
-        <div className="border-t border-white/10 p-3">
+        <div className="space-y-1 border-t border-white/10 p-3">
+          <Button
+            variant="ghost"
+            className="w-full justify-start text-white hover:bg-white/10 hover:text-white"
+            disabled={restarting}
+            onClick={() => void handleRestart()}
+          >
+            <RefreshCw className={cn("h-4 w-4", restarting && "animate-spin")} />
+            {restarting ? "Перезапуск…" : "Перезапустить"}
+          </Button>
           <Button
             variant="ghost"
             className="w-full justify-start text-white hover:bg-white/10 hover:text-white"

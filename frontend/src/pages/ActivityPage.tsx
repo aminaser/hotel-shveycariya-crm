@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ScrollText, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { apiFetch, ApiError } from "@/api/client";
 import { AuthorFilter } from "@/components/AuthorFilter";

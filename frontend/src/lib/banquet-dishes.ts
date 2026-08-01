@@ -4,6 +4,10 @@ import { formatMoney } from "@/lib/format";
 export const BANQUET_SERVICE_CHARGE_RATE = 0.1;
 export const BANQUET_SERVICE_CHARGE_PERCENT = 10;
 
+/** Portion step for menu qty: 0.5, 1, 1.5, 2… */
+export const QTY_STEP = 0.5;
+export const QTY_MIN = 0.5;
+
 export interface OrderedDish {
   key: string;
   name: string;
@@ -18,8 +22,20 @@ interface DishesPayloadV1 {
   note?: string;
 }
 
+/** Snap quantity to 0.5 steps (0.5, 1, 1.5…). */
+export function normalizeQty(value: number, min: number = QTY_MIN): number {
+  if (!Number.isFinite(value) || value < min - 1e-9) return min;
+  const stepped = Math.round(value / QTY_STEP) * QTY_STEP;
+  return Math.max(min, Math.round(stepped * 10) / 10);
+}
+
+export function formatQty(value: number): string {
+  const n = Math.round(value * 10) / 10;
+  return Number.isInteger(n) ? String(n) : n.toFixed(1);
+}
+
 export function dishLineTotal(item: OrderedDish): number {
-  return item.price * item.quantity;
+  return Math.round(item.price * item.quantity);
 }
 
 export function dishesTotal(items: OrderedDish[]): number {
@@ -53,7 +69,7 @@ export function serializeDishes(items: OrderedDish[], note = ""): string {
       key: item.key,
       name: item.name,
       price: item.price,
-      quantity: item.quantity,
+      quantity: normalizeQty(item.quantity),
       ...(item.size ? { size: item.size } : {}),
     })),
   };
@@ -84,7 +100,7 @@ export function parseDishes(raw: string | null | undefined): {
             key: item.key || (item.size ? `${item.name}::${item.size}` : item.name),
             name: item.name,
             price: item.price,
-            quantity: item.quantity,
+            quantity: normalizeQty(item.quantity),
             ...(item.size ? { size: item.size } : {}),
           })),
         note: typeof data.note === "string" ? data.note : "",
@@ -107,7 +123,8 @@ export function formatDishesPreview(
   if (items.length === 0) return note || "—";
 
   const lines = items.map(
-    (item) => `${dishDisplayName(item)} × ${item.quantity} — ${formatMoney(dishLineTotal(item))}`,
+    (item) =>
+      `${dishDisplayName(item)} × ${formatQty(item.quantity)} — ${formatMoney(dishLineTotal(item))}`,
   );
   const { subtotal, service, total } = dishesTotalWithService(items);
   if (options?.serviceCharge && service > 0) {

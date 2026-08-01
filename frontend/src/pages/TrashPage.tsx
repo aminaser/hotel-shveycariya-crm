@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw, Trash2 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { apiFetch, ApiError } from "@/api/client";
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +15,7 @@ import {
 import { useAuthStore } from "@/stores/auth";
 
 interface CrmTrashItem {
-  type: "stay" | "client" | "banquet" | "takeaway";
+  type: "stay" | "client" | "banquet" | "takeaway" | "guest_service";
   id: number;
   title: string;
   subtitle: string | null;
@@ -39,6 +39,7 @@ const TYPE_LABEL: Record<string, string> = {
   client: "Клиенты",
   banquet: "Банкеты",
   takeaway: "На вынос",
+  guest_service: "Услуги для гостей",
   spa: "Сауна / баня",
   request: "Заявки",
 };
@@ -197,6 +198,7 @@ export function TrashPage() {
     void queryClient.invalidateQueries({ queryKey: ["clients"] });
     void queryClient.invalidateQueries({ queryKey: ["banquets"] });
     void queryClient.invalidateQueries({ queryKey: ["takeaway-orders"] });
+    void queryClient.invalidateQueries({ queryKey: ["guest-services"] });
     void queryClient.invalidateQueries({ queryKey: ["rooms"] });
   };
 

@@ -16,6 +16,12 @@ from app.schemas.takeaway_order import (
     TakeawayOrderUpdate,
 )
 from app.services.audit import log_activity, set_created_by, set_updated_by, summarize_changes
+from app.services.supabase_crm_sync import (
+    ensure_cloud_id,
+    soft_delete_takeaway,
+    sync_takeaways,
+    upsert_takeaway,
+)
 
 router = APIRouter(prefix="/takeaway-orders", tags=["takeaway-orders"])
 
@@ -28,6 +34,7 @@ def list_takeaway_orders(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> list[TakeawayOrder]:
+    sync_takeaways(db)
     query = db.query(TakeawayOrder).filter(TakeawayOrder.deleted_at.is_(None))
     if date_from:
         query = query.filter(TakeawayOrder.order_date >= date_from)
@@ -45,6 +52,7 @@ def create_takeaway_order(
     current_user: User = Depends(get_current_user),
 ) -> TakeawayOrder:
     order = TakeawayOrder(**payload.model_dump())
+    ensure_cloud_id(order)
     set_created_by(order, current_user)
     db.add(order)
     db.flush()
@@ -59,6 +67,7 @@ def create_takeaway_order(
     )
     db.commit()
     db.refresh(order)
+    upsert_takeaway(order)
     return order
 
 
@@ -81,6 +90,7 @@ def update_takeaway_order(
     old_snapshot = {k: getattr(order, k) for k in data}
     for key, value in data.items():
         setattr(order, key, value)
+    ensure_cloud_id(order)
     set_updated_by(order, current_user)
     old_val, new_val = summarize_changes(old_snapshot, {k: getattr(order, k) for k in data})
     log_activity(
@@ -95,6 +105,7 @@ def update_takeaway_order(
     )
     db.commit()
     db.refresh(order)
+    upsert_takeaway(order)
     return order
 
 
@@ -114,6 +125,7 @@ def delete_takeaway_order(
 
     name = order.guest_name
     order.deleted_at = datetime.now(timezone.utc)
+    ensure_cloud_id(order)
     set_updated_by(order, current_user)
     log_activity(
         db,
@@ -124,4 +136,5 @@ def delete_takeaway_order(
         entity_label=name,
     )
     db.commit()
+    soft_delete_takeaway(order)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

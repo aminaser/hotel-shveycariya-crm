@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { apiFetch, ApiError } from "@/api/client";
 import type { Stay } from "@/api/types";
@@ -28,7 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { logClientActivity } from "@/lib/activity";
-import { todayLocal as todayLocalShared } from "@/lib/dates";
+import { todayLocal as todayLocalShared, isGuestInRoom } from "@/lib/dates";
 import { formatMoney } from "@/lib/format";
 import {
   formatPaymentMethod,
@@ -316,11 +316,14 @@ function formatDate(isoDate: string) {
 }
 
 function stayGuestLabel(stay: Stay): string {
-  const today = todayLocal();
-  const status =
-    stay.stay_type === "booking" && (!stay.check_in || stay.check_in > today)
-      ? "бронь"
-      : "в номере";
+  const inRoom = isGuestInRoom(
+    stay.check_out,
+    stay.check_in ?? stay.record_date,
+    stay.stay_type,
+    stay.planned_check_out,
+    { checkedInAt: stay.checked_in_at, inRoom: stay.in_room },
+  );
+  const status = inRoom ? "в номере" : "заселение в 13:00";
   return `${stay.client_name} · №${stay.room_number} · ${status}`;
 }
 

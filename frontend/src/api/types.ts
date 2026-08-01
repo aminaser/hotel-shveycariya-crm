@@ -61,6 +61,8 @@ export interface Stay {
   payment_date: string | null;
   group_id: string | null;
   notes: string | null;
+  checked_in_at: string | null;
+  in_room: boolean;
   created_at: string;
   updated_at: string;
   client_name: string;
@@ -95,6 +97,7 @@ export interface Room {
 
 export interface Banquet {
   id: number;
+  cloud_id?: string | null;
   event_date: string;
   event_time: string | null;
   guest_name: string;
@@ -102,7 +105,9 @@ export interface Banquet {
   venue: string | null;
   people_count: number;
   event_type: string | null;
+  payment_amount: string;
   prepayment: string;
+  payment_status: PaymentStatus;
   payment_method: string | null;
   payment_date: string | null;
   dishes: string | null;
@@ -117,6 +122,7 @@ export interface Banquet {
 
 export interface TakeawayOrder {
   id: number;
+  cloud_id?: string | null;
   order_date: string;
   order_time: string | null;
   guest_name: string;
@@ -125,6 +131,32 @@ export interface TakeawayOrder {
   payment_method: string | null;
   payment_date: string | null;
   dishes: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by_user_id: number | null;
+  created_by_name: string | null;
+  updated_by_user_id: number | null;
+  updated_by_name: string | null;
+}
+
+export type GuestServiceType = "laundry_hotel" | "laundry_own";
+
+export interface GuestService {
+  id: number;
+  service_date: string;
+  service_type: GuestServiceType;
+  item_count: number;
+  unit_price: string;
+  amount: string;
+  stay_id: number | null;
+  client_id: number | null;
+  room_id: number | null;
+  guest_name: string;
+  room_number: string | null;
+  payment_status: PaymentStatus;
+  payment_method: string | null;
+  payment_date: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;

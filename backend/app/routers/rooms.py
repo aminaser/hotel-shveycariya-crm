@@ -12,7 +12,17 @@ from app.models.room import Room, RoomStatus
 from app.models.user import User
 from app.schemas.stay import RoomResponse, RoomUpdate
 from app.services.audit import log_activity
-from app.services.room_service import TZ, apply_due_checkins, get_active_stay, stay_should_occupy
+from app.services.room_service import (
+    TZ,
+    apply_due_checkins,
+    can_mark_occupied_now,
+    clear_stay_arrived,
+    get_active_stay,
+    mark_stay_arrived,
+    stay_check_in_date,
+    stay_should_occupy,
+    today_local,
+)
 
 
 router = APIRouter(prefix="/rooms", tags=["rooms"])
@@ -101,8 +111,8 @@ def update_room(
             )
 
     new_status = data.get("status")
+    active = get_active_stay(db, room_id)
     if new_status is not None and new_status != RoomStatus.occupied:
-        active = get_active_stay(db, room_id)
         if active and stay_should_occupy(active):
             raise HTTPException(
                 status_code=400,
@@ -111,6 +121,10 @@ def update_room(
                     "Оформите выезд в журнале."
                 ),
             )
+    if new_status == RoomStatus.occupied:
+        ok, reason = can_mark_occupied_now(active)
+        if not ok:
+            raise HTTPException(status_code=400, detail=reason)
 
     old_status = room.status.value if hasattr(room.status, "value") else str(room.status)
     old_price = room.price_per_night
@@ -122,6 +136,16 @@ def update_room(
 
     if "status" in data:
         new_status_val = data["status"].value if hasattr(data["status"], "value") else str(data["status"])
+        if data["status"] == RoomStatus.occupied and active:
+            mark_stay_arrived(active)
+        elif (
+            data["status"] == RoomStatus.booked
+            and active
+            and getattr(active, "checked_in_at", None) is not None
+            and stay_check_in_date(active) >= today_local()
+        ):
+            clear_stay_arrived(active)
+
         log_activity(
             db,
             user=current_user,

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Pencil, Plus, ShoppingBag, Trash2, UtensilsCrossed } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { apiFetch, ApiError } from "@/api/client";
 import type { TakeawayOrder } from "@/api/types";
@@ -297,13 +297,6 @@ export function TakeawayOrdersPage() {
       >
         <DialogContent
           className="max-h-[90vh] max-w-lg overflow-y-auto"
-          closeOnOutsideClick
-          onPointerDownOutside={(event) => {
-            if (menuOpen) event.preventDefault();
-          }}
-          onInteractOutside={(event) => {
-            if (menuOpen) event.preventDefault();
-          }}
           onEscapeKeyDown={(event) => {
             if (menuOpen) {
               event.preventDefault();

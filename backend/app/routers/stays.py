@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import logging
+import uuid
 
-from sqlalchemy import or_, func
+from sqlalchemy import or_
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session, joinedload
@@ -31,10 +32,9 @@ from app.services.room_service import (
     recalculate_room_status,
     apply_due_checkins,
     today_local,
-    now_local,
     validate_stay_for_room,
-    CHECK_IN_HOUR,
-    CHECK_OUT_HOUR,
+    stay_should_occupy,
+    mark_stay_arrived,
 )
 
 router = APIRouter(prefix="/stays", tags=["stays"])
@@ -61,6 +61,7 @@ def _stay_to_response(stay: Stay) -> StayResponse:
         people_count=getattr(stay, "people_count", None) or 1,
         group_id=getattr(stay, "group_id", None),
         notes=stay.notes,
+        checked_in_at=getattr(stay, "checked_in_at", None),
         created_at=stay.created_at,
         updated_at=stay.updated_at,
         client_name=stay.client.full_name if stay.client else "—",
@@ -71,6 +72,7 @@ def _stay_to_response(stay: Stay) -> StayResponse:
         created_by_name=stay.created_by_name,
         updated_by_user_id=stay.updated_by_user_id,
         updated_by_name=stay.updated_by_name,
+        in_room=stay_should_occupy(stay) if stay.check_out is None else False,
     )
 
 
@@ -269,23 +271,11 @@ def list_stays(
     elif filter == "active":
         # Actually in the room now — exclude future check-ins (бронь) and
         # guests past planned checkout 12:00 (номер уже свободен).
-        check_in_expr = func.coalesce(Stay.check_in, Stay.record_date)
-        hour = now_local().hour
-        if hour >= CHECK_IN_HOUR:
-            in_room_today = check_in_expr <= today
-        else:
-            in_room_today = check_in_expr < today
-        query = query.filter(
-            Stay.check_out.is_(None),
-            or_(Stay.stay_type == StayType.extension, in_room_today),
-        )
-        if hour >= CHECK_OUT_HOUR:
-            query = query.filter(
-                or_(
-                    Stay.planned_check_out.is_(None),
-                    Stay.planned_check_out != today,
-                )
-            )
+        stays_all = query.filter(Stay.check_out.is_(None)).all()
+        active_ids = [s.id for s in stays_all if stay_should_occupy(s)]
+        if not active_ids:
+            return []
+        query = query.filter(Stay.id.in_(active_ids))
 
     if payment_method == "other":
         query = query.filter(
@@ -344,6 +334,10 @@ def create_stay(
         data["check_in"] = payload.record_date
     if payload.stay_type != StayType.alumni:
         data["people_count"] = data.get("people_count") or 1
+    # Alumni bookings must have an explicit group_id so rooms are never
+    # soft-merged by client name/dates (wrong rooms showed «Алтын»).
+    if payload.stay_type == StayType.alumni and not data.get("group_id"):
+        data["group_id"] = str(uuid.uuid4())
     data["payment_date"] = _normalize_payment_fields(
         payment_status=payload.payment_status,
         payment_date=payload.payment_date,
@@ -580,6 +574,7 @@ def undo_checkout_stay(
 
     old_value = str(stay.check_out)
     stay.check_out = None
+    mark_stay_arrived(stay)
     set_updated_by(stay, current_user)
     recalculate_room_status(db, stay.room_id)
     log_activity(

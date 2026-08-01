@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FileText, Plus, Printer, Search, Trash2, FileSpreadsheet } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { apiDownload, apiFetch, ApiError } from "@/api/client";
 import type { ActDocument, ActLineItemInput, ActLookupResult, AppSettings } from "@/api/types";

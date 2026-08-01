@@ -1,6 +1,6 @@
 {
   "name": "hotel-shveycariya-crm",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "private": true,
   "description": "CRM для отеля Швейцария, Текели",
   "main": "electron/main.cjs",
@@ -11,7 +11,7 @@
     "prepare:runtime": "bash scripts/prepare-runtime.sh",
     "prepare:runtime:win": "bash scripts/prepare-runtime.sh win",
     "build:frontend": "cd frontend && npm run build",
-    "electron:dev": "concurrently -k \"npm run dev:backend\" \"npm run dev:frontend\" \"wait-on -t 60000 http-get://127.0.0.1:8000/api/v1/health http-get://127.0.0.1:5173 && env SKIP_BACKEND=1 electron .\"",
+    "electron:dev": "concurrently -k \"npm run dev:backend\" \"npm run dev:frontend\" \"wait-on -t 60000 http-get://127.0.0.1:8000/api/v1/health http-get://127.0.0.1:5173 && env -u ELECTRON_RUN_AS_NODE SKIP_BACKEND=1 electron .\"",
     "electron:build": "npm run prepare:runtime && npm run build:frontend && electron-builder --mac",
     "electron:build:win": "npm run prepare:runtime:win && npm run build:frontend && electron-builder --win --x64",
     "install:all": "cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && cd ../frontend && npm install && cd .. && npm install"

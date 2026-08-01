@@ -86,37 +86,46 @@ def get_active_stay(db: Session, room_id: int, exclude_stay_id: int | None = Non
     future = [s for s in open_stays if stay_check_in_date(s) > today]
     if future:
         return future[0]
-    pending_today = [
+    # Check-in date reached but not occupying yet (no confirm, or before 13:00).
+    # Must include checked_in_at rows that are still waiting for 13:00 — otherwise
+    # the room looks free and the next booking disappears from «Номера».
+    awaiting_arrival = [
         s
         for s in open_stays
-        if stay_check_in_date(s) == today and not stay_released_by_checkout_time(s)
+        if stay_check_in_date(s) <= today
+        and not stay_released_by_checkout_time(s)
+        and not stay_should_occupy(s)
+        and s.stay_type != StayType.extension
     ]
-    if pending_today:
-        return pending_today[0]
+    if awaiting_arrival:
+        return awaiting_arrival[0]
     return None
 
 
 def stay_released_by_checkout_time(stay: Stay, now: datetime | None = None) -> bool:
-    """True when planned checkout day has reached 12:00 — room is free for turnover."""
+    """True when the guest should have left by planned checkout (room free for turnover).
+
+    - Planned checkout date already in the past → released
+    - Planned checkout is today from 12:00 → released (in from 13:00 for next guest)
+    """
     now = now or now_local()
     planned_out = stay.planned_check_out
-    return (
-        planned_out is not None
-        and planned_out == now.date()
-        and now.hour >= CHECK_OUT_HOUR
-    )
+    if planned_out is None:
+        return False
+    today = now.date()
+    if planned_out < today:
+        return True
+    return planned_out == today and now.hour >= CHECK_OUT_HOUR
 
 
 def stay_should_occupy(stay: Stay, now: datetime | None = None) -> bool:
     """Whether an open stay should make the room occupied (vs booked).
 
     Rules:
-    - extension → occupied until planned checkout day 12:00 (same as booking)
-    - check-in date in the past → occupied
-    - check-in date in the future → booked
-    - check-in date is today → occupied only from 13:00 (Asia/Almaty)
-    - planned checkout day from 12:00 → room freed for next guest (even without
-      formal checkout yet); date ranges use half-open [check_in, checkout)
+    - planned checkout day from 12:00 (or past) → not occupying
+    - extension → occupied until planned checkout 12:00
+    - booking / alumni → need staff confirm (checked_in_at) AND
+      on check-in day only after 13:00 (hotel arrival time)
     """
     now = now or now_local()
     today = now.date()
@@ -129,11 +138,45 @@ def stay_should_occupy(stay: Stay, now: datetime | None = None) -> bool:
         return True
 
     check_in = stay_check_in_date(stay)
-    if check_in < today:
-        return True
     if check_in > today:
         return False
-    return now.hour >= CHECK_IN_HOUR
+
+    if getattr(stay, "checked_in_at", None) is None:
+        return False
+
+    # Check-in day: «в номере» only from 13:00.
+    if check_in == today and now.hour < CHECK_IN_HOUR:
+        return False
+
+    return True
+
+
+def can_mark_occupied_now(stay: Stay | None = None, now: datetime | None = None) -> tuple[bool, str]:
+    """Whether staff may set room status to occupied right now."""
+    now = now or now_local()
+    if stay is not None:
+        check_in = stay_check_in_date(stay)
+        if check_in > now.date():
+            return False, "Дата заезда ещё не наступила"
+        if check_in == now.date() and now.hour < CHECK_IN_HOUR:
+            return (
+                False,
+                f"Статус «в номере» можно поставить с {CHECK_IN_HOUR}:00 в день заезда",
+            )
+        return True, ""
+    if now.hour < CHECK_IN_HOUR:
+        return False, f"Заселение в номер с {CHECK_IN_HOUR}:00"
+    return True, ""
+
+
+def mark_stay_arrived(stay: Stay, at: datetime | None = None) -> None:
+    """Record that the guest physically checked in."""
+    if stay.checked_in_at is None:
+        stay.checked_in_at = at or now_local()
+
+
+def clear_stay_arrived(stay: Stay) -> None:
+    stay.checked_in_at = None
 
 
 def recalculate_room_status(db: Session, room_id: int) -> None:
@@ -147,14 +190,8 @@ def recalculate_room_status(db: Session, room_id: int) -> None:
     if stay:
         if stay_should_occupy(stay):
             room.status = RoomStatus.occupied
-        elif (
-            room.status == RoomStatus.occupied
-            and stay_check_in_date(stay) == today_local()
-        ):
-            # Early check-in on the check-in day (before 13:00) — keep occupied.
-            pass
         else:
-            # Future booking — not in the room yet.
+            # Future booking or check-in day without confirmed arrival.
             room.status = RoomStatus.booked
     else:
         open_stays = get_open_stays(db, room_id)
@@ -175,8 +212,8 @@ def recalculate_room_status(db: Session, room_id: int) -> None:
 
 
 def apply_due_checkins(db: Session) -> int:
-    """Promote booked→occupied at check-in time; free rooms after checkout 12:00;
-    demote occupied→booked when the only open stay is still a future booking.
+    """Sync room status from open stays: demote false «occupied» before arrival,
+    free rooms after checkout 12:00. Does not auto-check-in at 13:00.
     """
     changed = 0
     candidates = (

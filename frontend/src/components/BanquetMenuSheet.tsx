@@ -12,7 +12,11 @@ import {
   dishDisplayName,
   dishLineTotal,
   dishesTotalWithService,
+  formatQty,
+  normalizeQty,
   parseDishes,
+  QTY_MIN,
+  QTY_STEP,
   serializeDishes,
   type OrderedDish,
 } from "@/lib/banquet-dishes";
@@ -34,50 +38,60 @@ interface BanquetMenuSheetProps {
   onSave: (serialized: string) => void;
   /** Banquet uses restaurant menu + 10% service; takeaway uses takeaway menu, no service. */
   kind?: OrderMenuKind;
+  /** Override service charge (e.g. «Ас» package: restaurant menu, no service). */
+  serviceCharge?: boolean;
+  /** Open on this menu tab when the sheet opens (e.g. «pominki»). */
+  initialTabId?: string;
 }
 
 function QtyInput({
   value,
   onChange,
-  min = 1,
+  min = QTY_MIN,
+  step = QTY_STEP,
   className,
   "aria-label": ariaLabel = "Количество",
 }: {
   value: number;
   onChange: (next: number) => void;
   min?: number;
+  step?: number;
   className?: string;
   "aria-label"?: string;
 }) {
-  const [text, setText] = useState(String(value));
+  const [text, setText] = useState(formatQty(value));
 
   useEffect(() => {
-    setText(String(value));
+    setText(formatQty(value));
   }, [value]);
 
   const commit = (raw: string) => {
-    const n = parseInt(raw, 10);
-    if (!raw || Number.isNaN(n) || n < min) {
+    const normalized = raw.trim().replace(",", ".");
+    const n = parseFloat(normalized);
+    if (!normalized || Number.isNaN(n) || n < min) {
       onChange(min);
-      setText(String(min));
+      setText(formatQty(min));
       return;
     }
-    onChange(n);
-    setText(String(n));
+    const next = normalizeQty(n, min);
+    onChange(next);
+    setText(formatQty(next));
   };
 
   return (
     <input
       type="text"
-      inputMode="numeric"
+      inputMode="decimal"
       aria-label={ariaLabel}
       value={text}
       onChange={(e) => {
-        const raw = e.target.value.replace(/\D/g, "");
+        const raw = e.target.value.replace(/[^\d.,]/g, "");
         setText(raw);
-        if (raw === "") return;
-        const n = parseInt(raw, 10);
-        if (!Number.isNaN(n) && n >= min) onChange(n);
+        if (raw === "" || raw === "." || raw === ",") return;
+        const n = parseFloat(raw.replace(",", "."));
+        if (!Number.isNaN(n) && n >= min) {
+          onChange(normalizeQty(n, min));
+        }
       }}
       onBlur={() => commit(text)}
       onKeyDown={(e) => {
@@ -85,6 +99,14 @@ function QtyInput({
           e.preventDefault();
           commit(text);
           (e.target as HTMLInputElement).blur();
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          onChange(normalizeQty(value + step, min));
+        }
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          onChange(normalizeQty(value - step, min));
         }
       }}
       onFocus={(e) => e.target.select()}
@@ -102,13 +124,15 @@ export function BanquetMenuSheet({
   onClose,
   onSave,
   kind = "banquet",
+  serviceCharge,
+  initialTabId,
 }: BanquetMenuSheetProps) {
   const isTakeaway = kind === "takeaway";
   const restaurant = useRestaurantMenu(open && !isTakeaway);
   const takeaway = useTakeawayMenu(open && isTakeaway);
   const menu = isTakeaway ? takeaway.menu : restaurant.menu;
   const isLoading = isTakeaway ? takeaway.isLoading : restaurant.isLoading;
-  const applyService = !isTakeaway;
+  const applyService = serviceCharge ?? !isTakeaway;
 
   const [tabId, setTabId] = useState(menu[0]?.id ?? "custom");
   const [subId, setSubId] = useState(menu[0]?.subcategories[0]?.id ?? "");
@@ -124,12 +148,15 @@ export function BanquetMenuSheet({
     setNote(parsed.note);
     setQuery("");
     setDraftQty({});
-    const firstTab = menu.find((t: MenuTab) => t.id === "custom") ?? menu[0];
-    if (firstTab) {
-      setTabId(firstTab.id);
-      setSubId(firstTab.subcategories[0]?.id ?? "");
+    const preferred =
+      (initialTabId ? menu.find((t: MenuTab) => t.id === initialTabId) : undefined) ??
+      menu.find((t: MenuTab) => t.id === "custom") ??
+      menu[0];
+    if (preferred) {
+      setTabId(preferred.id);
+      setSubId(preferred.subcategories[0]?.id ?? "");
     }
-  }, [open, value, menu]);
+  }, [open, value, menu, initialTabId]);
 
   const catalog = useMemo(() => flattenMenu(menu), [menu]);
 
@@ -176,7 +203,7 @@ export function BanquetMenuSheet({
   const getDraftQty = (key: string) => draftQty[key] ?? 1;
 
   const setItemQty = (key: string, next: number) => {
-    setDraftQty((prev) => ({ ...prev, [key]: Math.max(1, next) }));
+    setDraftQty((prev) => ({ ...prev, [key]: normalizeQty(next) }));
   };
 
   const addToOrder = (item: MenuCatalogItem) => {
@@ -185,7 +212,9 @@ export function BanquetMenuSheet({
       const existing = prev.find((row) => row.key === item.key);
       if (existing) {
         return prev.map((row) =>
-          row.key === item.key ? { ...row, quantity: row.quantity + qty } : row,
+          row.key === item.key
+            ? { ...row, quantity: normalizeQty(row.quantity + qty) }
+            : row,
         );
       }
       return [
@@ -203,12 +232,13 @@ export function BanquetMenuSheet({
   };
 
   const updateOrderQty = (key: string, quantity: number) => {
-    if (quantity <= 0) {
+    if (quantity < QTY_MIN - 1e-9) {
       setOrder((prev) => prev.filter((row) => row.key !== key));
       return;
     }
+    const next = normalizeQty(quantity);
     setOrder((prev) =>
-      prev.map((row) => (row.key === key ? { ...row, quantity } : row)),
+      prev.map((row) => (row.key === key ? { ...row, quantity: next } : row)),
     );
   };
 
@@ -221,7 +251,7 @@ export function BanquetMenuSheet({
 
   return createPortal(
     <div data-banquet-menu-sheet="" className="pointer-events-auto">
-      <div className="fixed inset-0 z-[70] bg-black/40" onClick={onClose} />
+      <div className="fixed inset-0 z-[70] bg-black/40" aria-hidden />
       <aside className="fixed right-0 top-0 z-[80] flex h-full w-full max-w-3xl flex-col border-l border-border bg-card shadow-2xl">
         <header className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
           <div className="min-w-0">
@@ -236,7 +266,9 @@ export function BanquetMenuSheet({
                 <p className="text-xs text-muted-foreground">
                   {isTakeaway
                     ? "Выберите блюда для заказа на вынос (без обслуживания)"
-                    : `Выберите блюда для банкета (+${BANQUET_SERVICE_CHARGE_PERCENT}% обслуживание)`}
+                    : applyService
+                      ? `Выберите блюда для банкета (+${BANQUET_SERVICE_CHARGE_PERCENT}% обслуживание)`
+                      : "Выберите блюда (без обслуживания)"}
                 </p>
               </div>
             </div>
@@ -342,7 +374,7 @@ export function BanquetMenuSheet({
                                   </p>
                                 </div>
                                 {inOrder && (
-                                  <Badge variant="success">×{inOrder.quantity}</Badge>
+                                  <Badge variant="success">×{formatQty(inOrder.quantity)}</Badge>
                                 )}
                               </div>
                               <div className="mt-3 flex items-center justify-between gap-2">
@@ -351,7 +383,10 @@ export function BanquetMenuSheet({
                                     type="button"
                                     className="flex h-8 w-8 items-center justify-center text-muted-foreground hover:text-foreground"
                                     onClick={() =>
-                                      setItemQty(item.key, getDraftQty(item.key) - 1)
+                                      setItemQty(
+                                        item.key,
+                                        getDraftQty(item.key) - QTY_STEP,
+                                      )
                                     }
                                     aria-label="Уменьшить"
                                   >
@@ -365,7 +400,10 @@ export function BanquetMenuSheet({
                                     type="button"
                                     className="flex h-8 w-8 items-center justify-center text-muted-foreground hover:text-foreground"
                                     onClick={() =>
-                                      setItemQty(item.key, getDraftQty(item.key) + 1)
+                                      setItemQty(
+                                        item.key,
+                                        getDraftQty(item.key) + QTY_STEP,
+                                      )
                                     }
                                     aria-label="Увеличить"
                                   >
@@ -393,7 +431,10 @@ export function BanquetMenuSheet({
               <div>
                 <p className="text-sm font-semibold">Список заказных блюд</p>
                 <p className="text-xs text-muted-foreground">
-                  {orderCount > 0 ? `${orderCount} поз.` : "Пока пусто"}
+                  {orderCount > 0
+                    ? `${formatQty(orderCount)} порц.`
+                    : "Пока пусто"}
+                  {" · шаг 0,5"}
                 </p>
               </div>
               {order.length > 0 && (
@@ -427,7 +468,7 @@ export function BanquetMenuSheet({
                             {dishDisplayName(item)}
                           </p>
                           <p className="mt-0.5 text-xs text-muted-foreground">
-                            {formatMoney(item.price)} × {item.quantity}
+                            {formatMoney(item.price)} × {formatQty(item.quantity)}
                           </p>
                         </div>
                         <button
@@ -444,7 +485,9 @@ export function BanquetMenuSheet({
                           <button
                             type="button"
                             className="flex h-7 w-7 items-center justify-center"
-                            onClick={() => updateOrderQty(item.key, item.quantity - 1)}
+                            onClick={() =>
+                              updateOrderQty(item.key, item.quantity - QTY_STEP)
+                            }
                             aria-label="Уменьшить"
                           >
                             <Minus className="h-3 w-3" />
@@ -457,7 +500,9 @@ export function BanquetMenuSheet({
                           <button
                             type="button"
                             className="flex h-7 w-7 items-center justify-center"
-                            onClick={() => updateOrderQty(item.key, item.quantity + 1)}
+                            onClick={() =>
+                              updateOrderQty(item.key, item.quantity + QTY_STEP)
+                            }
                             aria-label="Увеличить"
                           >
                             <Plus className="h-3 w-3" />

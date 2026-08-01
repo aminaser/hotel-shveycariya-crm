@@ -119,7 +119,13 @@ export default function App() {
         <Route path="/" element={<RootRedirect />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-      <Toaster position="top-right" richColors duration={1000} toastOptions={{ duration: 1000 }} />
+      <Toaster
+        position="top-right"
+        richColors
+        duration={2000}
+        closeButton
+        toastOptions={{ duration: 2000 }}
+      />
     </HashRouter>
   );
 }

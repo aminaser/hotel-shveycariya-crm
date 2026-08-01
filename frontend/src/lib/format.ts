@@ -36,7 +36,7 @@ export const roomStatusLabel: Record<string, string> = {
   occupied: "Занят",
   cleaning: "Свободно / Требуется уборка",
   maintenance: "Ремонт",
-  booked: "Бронь",
+  booked: "Заселение в 13:00",
 };
 
 export function csvEscape(value: string): string {

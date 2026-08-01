@@ -16,6 +16,7 @@ from app.routers import (
     auth,
     banquets,
     clients,
+    guest_services,
     health,
     restaurant_menu,
     rooms,
@@ -36,6 +37,7 @@ import app.models.app_settings  # noqa: F401
 import app.models.banquet  # noqa: F401
 import app.models.client  # noqa: F401
 import app.models.employee  # noqa: F401
+import app.models.guest_service  # noqa: F401
 import app.models.room  # noqa: F401
 import app.models.spa_booking_payment  # noqa: F401
 import app.models.stay  # noqa: F401
@@ -82,4 +84,5 @@ app.include_router(spa_prices.router, prefix=API_PREFIX)
 app.include_router(spa_payments.router, prefix=API_PREFIX)
 app.include_router(alumni_prices.router, prefix=API_PREFIX)
 app.include_router(takeaway_orders.router, prefix=API_PREFIX)
+app.include_router(guest_services.router, prefix=API_PREFIX)
 app.include_router(timesheet.router, prefix=API_PREFIX)

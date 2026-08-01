@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { apiFetch, ApiError, apiUrl } from "@/api/client";
 import type { AppSettings } from "@/api/types";
@@ -23,6 +23,26 @@ export function SettingsPage() {
   const [resetUserId, setResetUserId] = useState<number | "">("");
   const [resetPassword, setResetPassword] = useState("");
   const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+
+  const handleRestart = async () => {
+    if (restarting) return;
+    setRestarting(true);
+    try {
+      if (window.electronAPI?.relaunchApp) {
+        toast.success("Перезапуск приложения…");
+        await window.electronAPI.relaunchApp();
+        return;
+      }
+      window.location.reload();
+    } catch (error) {
+      console.error("relaunch-app failed:", error);
+      setRestarting(false);
+      toast.error(
+        "Не удалось перезапустить. Закройте CRM полностью и откройте снова.",
+      );
+    }
+  };
 
   const { data: settings } = useQuery({
     queryKey: ["settings"],
@@ -131,12 +151,21 @@ export function SettingsPage() {
       }
     },
     onSuccess: async () => {
-      toast.success("База восстановлена. Перезапуск приложения…");
       queryClient.clear();
       if (window.electronAPI?.relaunchApp) {
-        await window.electronAPI.relaunchApp();
-        return;
+        toast.success("База восстановлена. Перезапуск приложения…");
+        try {
+          await window.electronAPI.relaunchApp();
+          return;
+        } catch (error) {
+          console.error("relaunch-app failed:", error);
+          toast.error(
+            "База восстановлена. Полностью закройте CRM и откройте снова (не обновляйте страницу).",
+          );
+          return;
+        }
       }
+      toast.success("База восстановлена. Перезагрузка…");
       window.location.reload();
     },
     onError: (e) =>
@@ -354,6 +383,26 @@ export function SettingsPage() {
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Приложение</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Полный перезапуск закрывает CRM и сразу открывает снова — подхватывает
+            обновления логики и базы. Данные не удаляются.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={restarting}
+            onClick={() => void handleRestart()}
+          >
+            {restarting ? "Перезапуск…" : "Перезапустить"}
+          </Button>
+        </CardContent>
+      </Card>
 
       {window.electronAPI?.isElectron && (
         <Card>

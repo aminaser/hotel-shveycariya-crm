@@ -51,6 +51,11 @@ class Stay(Base):
     # Shared id when several rooms were booked together in one journal submit.
     group_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Set when staff confirms arrival (Rooms: booked→occupied / walk-in).
+    # Until then, a booking for today stays «бронь» even after 13:00.
+    checked_in_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     deleted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

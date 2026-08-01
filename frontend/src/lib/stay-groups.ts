@@ -1,6 +1,7 @@
 import type { PaymentStatus, Stay } from "@/api/types";
 import {
   alumniPackageAmount,
+  freeRoomBadgeKind,
   isCheckoutToday,
   isFutureBooking,
   isGuestInRoom,
@@ -18,6 +19,10 @@ export interface StayGroup {
   anyInRoom: boolean;
   anyBookedFuture: boolean;
   anyCheckoutToday: boolean;
+  /** Departure day from 12:00 (or formal checkout today). */
+  anyFreeFromNoon: boolean;
+  /** Day after departure (and later). */
+  anyFree: boolean;
   allCheckedOut: boolean;
 }
 
@@ -27,19 +32,8 @@ export function groupPaymentStatus(stays: Stay[]): PaymentStatus {
   return "partial";
 }
 
-/** Soft key for alumni rows created separately without group_id (e.g. «Алтын»). */
-export function alumniSoftGroupKey(stay: Stay): string | null {
-  if (stay.stay_type !== "alumni") return null;
-  if (stay.group_id) return null;
-  const checkIn = stay.check_in || stay.record_date;
-  const checkOut = stay.planned_check_out || "";
-  return `alumni:${stay.client_id}:${checkIn}:${checkOut}`;
-}
-
 export function stayGroupKey(stay: Stay): string {
   if (stay.group_id) return `g:${stay.group_id}`;
-  const soft = alumniSoftGroupKey(stay);
-  if (soft) return soft;
   return `s:${stay.id}`;
 }
 
@@ -48,11 +42,6 @@ export function staysInLogicalGroup(stay: Stay, all: Stay[]): Stay[] {
   if (stay.group_id) {
     const linked = all.filter((s) => s.group_id === stay.group_id);
     return linked.length > 0 ? [...linked].sort(sortByRoom) : [stay];
-  }
-  const soft = alumniSoftGroupKey(stay);
-  if (soft) {
-    const linked = all.filter((s) => alumniSoftGroupKey(s) === soft);
-    if (linked.length > 1) return [...linked].sort(sortByRoom);
   }
   return [stay];
 }
@@ -142,14 +131,26 @@ export function groupStays(stays: Stay[]): StayGroup[] {
           s.check_in ?? s.record_date,
           s.stay_type,
           s.planned_check_out,
+          { checkedInAt: s.checked_in_at, inRoom: s.in_room },
         ),
       ),
       anyBookedFuture: members.some((s) =>
-        isFutureBooking(s.check_out, s.check_in ?? s.record_date),
+        isFutureBooking(s.check_out, s.check_in ?? s.record_date, {
+          checkedInAt: s.checked_in_at,
+          inRoom: s.in_room,
+          plannedCheckOut: s.planned_check_out,
+          stayType: s.stay_type,
+        }),
       ),
       anyCheckoutToday: members.some(
         (s) =>
           isOpenStay(s.check_out) && isCheckoutToday(s.planned_check_out),
+      ),
+      anyFreeFromNoon: members.some(
+        (s) => freeRoomBadgeKind(s.check_out, s.planned_check_out) === "free_from_noon",
+      ),
+      anyFree: members.some(
+        (s) => freeRoomBadgeKind(s.check_out, s.planned_check_out) === "free",
       ),
       allCheckedOut: members.every((s) => !isOpenStay(s.check_out)),
     };

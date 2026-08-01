@@ -1,7 +1,7 @@
 from sqlalchemy import inspect, text
 
 from app.core.database import SessionLocal, engine
-from app.services.room_service import today_local
+from app.services.room_service import apply_due_checkins, today_local
 from app.services.seed_room_rates import seed_room_rates
 from app.services.seed_users import seed_users
 
@@ -35,11 +35,15 @@ BANQUET_COLUMNS = {
     "updated_by_name": "VARCHAR(255)",
     "payment_method": "VARCHAR(64)",
     "payment_date": "DATE",
+    "cloud_id": "VARCHAR(64)",
+    "payment_amount": "NUMERIC(12, 2) DEFAULT 0",
+    "payment_status": "VARCHAR(32) DEFAULT 'unpaid'",
 }
 
 TAKEAWAY_COLUMNS = {
     "payment_method": "VARCHAR(64)",
     "payment_date": "DATE",
+    "cloud_id": "VARCHAR(64)",
 }
 
 STAY_COLUMNS = {
@@ -52,6 +56,7 @@ STAY_COLUMNS = {
     "people_count": "INTEGER DEFAULT 1",
     "prepayment": "NUMERIC(12, 2) DEFAULT 0",
     "group_id": "VARCHAR(36)",
+    "checked_in_at": "DATETIME",
 }
 
 USER_COLUMNS = {
@@ -119,6 +124,63 @@ def _migrate_planned_check_out(conn) -> None:
     conn.commit()
 
 
+def _backfill_banquet_payment_status(conn) -> None:
+    """Derive payment_status / payment_amount from legacy prepayment-only rows."""
+    inspector = inspect(engine)
+    if "banquets" not in inspector.get_table_names():
+        return
+    columns = {col["name"] for col in inspector.get_columns("banquets")}
+    if "payment_status" not in columns or "payment_amount" not in columns:
+        return
+
+    conn.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS _crm_migrations ("
+            "name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+    )
+    conn.commit()
+    done = conn.execute(
+        text("SELECT 1 FROM _crm_migrations WHERE name = 'banquet_payment_status_v1'")
+    ).fetchone()
+    if done:
+        return
+
+    # Legacy: prepayment > 0 meant money received → mark paid, total = prepayment.
+    conn.execute(
+        text(
+            """
+            UPDATE banquets
+            SET payment_status = 'paid',
+                payment_amount = CASE
+                    WHEN COALESCE(payment_amount, 0) > 0 THEN payment_amount
+                    ELSE prepayment
+                END
+            WHERE COALESCE(prepayment, 0) > 0
+              AND (payment_status IS NULL OR payment_status = '' OR payment_status = 'unpaid')
+            """
+        )
+    )
+    conn.execute(
+        text(
+            """
+            UPDATE banquets
+            SET payment_status = 'unpaid',
+                payment_amount = COALESCE(payment_amount, 0)
+            WHERE payment_status IS NULL OR payment_status = ''
+            """
+        )
+    )
+    conn.execute(
+        text(
+            "INSERT INTO _crm_migrations (name, applied_at) "
+            "VALUES ('banquet_payment_status_v1', :applied_at)"
+        ),
+        {"applied_at": today_local().isoformat()},
+    )
+    conn.commit()
+
+
 def run_migrations() -> None:
     """Lightweight SQLite migrations for existing databases."""
     with engine.connect() as conn:
@@ -143,8 +205,25 @@ def run_migrations() -> None:
         for column, col_type in BANQUET_COLUMNS.items():
             _add_column_if_missing(conn, "banquets", column, col_type)
 
+        _backfill_banquet_payment_status(conn)
+
         for column, col_type in TAKEAWAY_COLUMNS.items():
             _add_column_if_missing(conn, "takeaway_orders", column, col_type)
+
+        # Stable UUID keys used for Supabase multi-PC sync.
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_banquets_cloud_id "
+                "ON banquets (cloud_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_takeaway_orders_cloud_id "
+                "ON takeaway_orders (cloud_id)"
+            )
+        )
+        conn.commit()
 
         for column, col_type in STAY_COLUMNS.items():
             _add_column_if_missing(conn, "stays", column, col_type)
@@ -157,13 +236,129 @@ def run_migrations() -> None:
         _migrate_planned_check_out(conn)
         _migrate_client_iin_bin_unique(conn)
         _migrate_payment_date_backfill(conn)
+        _migrate_checked_in_at_backfill(conn)
+        _migrate_clear_premature_checked_in_at(conn)
 
     db = SessionLocal()
     try:
         seed_users(db)
         seed_room_rates(db)
+        apply_due_checkins(db)
+        db.commit()
     finally:
         db.close()
+
+
+def _migrate_clear_premature_checked_in_at(conn) -> None:
+    """Undo backfill arrival marks for bookings that never went «в номере».
+
+    Synthetic checked_in_at on free/booked rooms hid today's guests from
+    «Номера» before 13:00 and would auto-occupy at 13:00 without confirm.
+    """
+    inspector = inspect(engine)
+    if "stays" not in inspector.get_table_names():
+        return
+    columns = {col["name"] for col in inspector.get_columns("stays")}
+    if "checked_in_at" not in columns:
+        return
+
+    conn.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS _crm_migrations ("
+            "name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+    )
+    conn.commit()
+    done = conn.execute(
+        text(
+            "SELECT 1 FROM _crm_migrations WHERE name = 'clear_premature_checked_in_at_v1'"
+        )
+    ).fetchone()
+    if done:
+        return
+
+    today = today_local().isoformat()
+    conn.execute(
+        text(
+            """
+            UPDATE stays
+            SET checked_in_at = NULL
+            WHERE deleted_at IS NULL
+              AND check_out IS NULL
+              AND checked_in_at IS NOT NULL
+              AND stay_type IN ('booking', 'alumni')
+              AND COALESCE(check_in, record_date) >= :today
+              AND room_id IN (
+                SELECT id FROM rooms
+                WHERE status IN ('free', 'booked', 'cleaning')
+              )
+            """
+        ),
+        {"today": today},
+    )
+    conn.execute(
+        text(
+            "INSERT INTO _crm_migrations (name, applied_at) VALUES "
+            "('clear_premature_checked_in_at_v1', :at)"
+        ),
+        {"at": today},
+    )
+    conn.commit()
+
+
+def _migrate_checked_in_at_backfill(conn) -> None:
+    """Backfill arrival only for stays whose room is already marked occupied."""
+    inspector = inspect(engine)
+    if "stays" not in inspector.get_table_names():
+        return
+    columns = {col["name"] for col in inspector.get_columns("stays")}
+    if "checked_in_at" not in columns:
+        return
+
+    conn.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS _crm_migrations ("
+            "name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+    )
+    conn.commit()
+    done = conn.execute(
+        text("SELECT 1 FROM _crm_migrations WHERE name = 'checked_in_at_occupied_backfill'")
+    ).fetchone()
+    if done:
+        return
+
+    today = today_local().isoformat()
+    conn.execute(
+        text(
+            """
+            UPDATE stays
+            SET checked_in_at = COALESCE(
+              datetime(COALESCE(check_in, record_date) || ' 13:00:00'),
+              created_at,
+              CURRENT_TIMESTAMP
+            )
+            WHERE id IN (
+              SELECT s.id
+              FROM stays s
+              JOIN rooms r ON r.id = s.room_id
+              WHERE s.deleted_at IS NULL
+                AND s.check_out IS NULL
+                AND s.checked_in_at IS NULL
+                AND s.stay_type IN ('booking', 'alumni')
+                AND r.status = 'occupied'
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            "INSERT INTO _crm_migrations (name, applied_at) VALUES "
+            "('checked_in_at_occupied_backfill', :at)"
+        ),
+        {"at": today},
+    )
+    conn.commit()
 
 
 def _migrate_client_iin_bin_unique(conn) -> None:

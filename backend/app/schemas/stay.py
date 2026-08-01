@@ -99,6 +99,7 @@ class StayResponse(BaseModel):
     payment_date: date | None = None
     group_id: str | None = None
     notes: str | None
+    checked_in_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     client_name: str
@@ -109,6 +110,8 @@ class StayResponse(BaseModel):
     created_by_name: str | None = None
     updated_by_user_id: int | None = None
     updated_by_name: str | None = None
+    # True when the guest is treated as physically in the room now.
+    in_room: bool = False
 
     model_config = {"from_attributes": True}
 

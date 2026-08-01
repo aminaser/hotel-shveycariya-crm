@@ -1,9 +1,9 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { apiFetch } from "@/api/client";
-import type { Banquet, Client, Stay } from "@/api/types";
+import type { Banquet, Client, Stay, TakeawayOrder } from "@/api/types";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import type { GuestRequest, SpaBooking } from "@/lib/supabase";
 import { useBadgeStore } from "@/stores/badges";
@@ -32,6 +32,12 @@ const WATCHED: WatchedQuery[] = [
     queryKey: ["banquets"],
     label: "Банкеты",
     route: "/banquets",
+    countFn: (d) => (Array.isArray(d) ? d.length : 0),
+  },
+  {
+    queryKey: ["takeaway-orders"],
+    label: "На вынос",
+    route: "/takeaway",
     countFn: (d) => (Array.isArray(d) ? d.length : 0),
   },
   {
@@ -106,6 +112,13 @@ export function useBackgroundPolling() {
   });
 
   useQuery({
+    queryKey: ["takeaway-orders"],
+    queryFn: () => apiFetch<TakeawayOrder[]>("/takeaway-orders"),
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: true,
+  });
+
+  useQuery({
     queryKey: ["clients"],
     queryFn: () => apiFetch<Client[]>("/clients"),
     refetchInterval: 60_000,
@@ -148,7 +161,6 @@ export function useNewRecordNotifications() {
             `Новая запись в «${watched.label}»!`,
             {
               description: diff === 1 ? "Добавлена 1 запись" : `Добавлено ${diff} записей`,
-              duration: 1000,
             },
           );
         }
