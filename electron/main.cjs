@@ -420,14 +420,25 @@ function registerIpcHandlers() {
     }
     try {
       const autoUpdater = getAutoUpdater();
+      const current = app.getVersion();
       const result = await autoUpdater.checkForUpdates();
+      const latest = result?.updateInfo?.version ?? null;
+      const upToDate =
+        !latest ||
+        String(latest).trim() === String(current).trim();
       return {
         ok: true,
-        version: result?.updateInfo?.version ?? null,
+        current,
+        version: latest,
+        upToDate,
       };
     } catch (error) {
       console.error("[updater]", error);
-      return { ok: false, reason: error.message || String(error) };
+      return {
+        ok: false,
+        current: app.getVersion(),
+        reason: error.message || String(error),
+      };
     }
   });
 }

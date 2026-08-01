@@ -19,7 +19,9 @@ declare global {
       relaunchApp: () => Promise<{ ok: boolean } | void>;
       checkForUpdates: () => Promise<{
         ok: boolean;
+        current?: string;
         version?: string | null;
+        upToDate?: boolean;
         reason?: string;
       }>;
     };

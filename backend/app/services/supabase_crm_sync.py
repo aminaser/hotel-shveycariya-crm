@@ -653,7 +653,20 @@ def _pull_stays(db: Session) -> int:
             if number:
                 room = db.query(Room).filter(Room.number == number).first()
         if room is None:
-            continue
+            # Cloud stay without a matched room — create a placeholder so pull
+            # does not skip the whole journal after a wiped local DB.
+            number = str(row.get("room_number") or "").strip() or f"cloud-{cloud_id[:8]}"
+            room = db.query(Room).filter(Room.number == number).first()
+            if room is None:
+                room = Room(
+                    number=number,
+                    cloud_id=str(room_cloud) if room_cloud else None,
+                    status=RoomStatus.free,
+                )
+                if room_cloud:
+                    room.cloud_id = str(room_cloud)
+                db.add(room)
+                db.flush()
 
         if local is None:
             stay_type_raw = (row.get("stay_type") or "booking").strip().lower()
@@ -1010,26 +1023,48 @@ def run_full_sync(db: Session, *, seed_all: bool = True) -> dict[str, Any]:
 
         try:
             if seed_all:
-                _seed_outbox_for_unsynced(db)
+                try:
+                    _seed_outbox_for_unsynced(db)
+                    db.commit()
+                except Exception as exc:
+                    logger.warning("Outbox seed failed: %s", exc, exc_info=True)
+                    db.rollback()
+
+            # Pull each entity independently — one failure must not wipe spa/requests.
+            pull_steps = (
+                ("clients", _pull_clients),
+                ("rooms", _pull_rooms),
+                ("stays", _pull_stays),
+                ("guest_services", _pull_guest_services),
+                ("banquets", _pull_banquets),
+                ("takeaways", _pull_takeaways),
+                ("spa_bookings", _pull_spa),
+                ("guest_requests", _pull_requests),
+            )
+            for name, fn in pull_steps:
+                try:
+                    touched = fn(db)
+                    db.commit()
+                    logger.info("Sync pull %s: %s row(s)", name, touched)
+                except Exception as exc:
+                    logger.warning("Sync pull %s failed: %s", name, exc, exc_info=True)
+                    db.rollback()
+
+            flushed = 0
+            purged = 0
+            try:
+                flushed = _flush_outbox(db)
+                purged = purge_old_trash(db)
                 db.commit()
+            except Exception as exc:
+                logger.warning("Outbox flush/purge failed: %s", exc, exc_info=True)
+                db.rollback()
 
-            # Dependency order for pull.
-            _pull_clients(db)
-            _pull_rooms(db)
-            _pull_stays(db)
-            _pull_guest_services(db)
-            _pull_banquets(db)
-            _pull_takeaways(db)
-            _pull_spa(db)
-            _pull_requests(db)
-            db.commit()
-
-            flushed = _flush_outbox(db)
-            purged = purge_old_trash(db)
-            db.commit()
-
-            _set_state(db, "global", "ok")
-            db.commit()
+            try:
+                _set_state(db, "global", "ok")
+                db.commit()
+            except Exception:
+                db.rollback()
 
             _last_status.update(
                 {

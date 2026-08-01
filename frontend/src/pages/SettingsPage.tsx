@@ -412,8 +412,8 @@ export function SettingsPage() {
           <CardContent className="space-y-3">
             <p className="text-sm text-muted-foreground">
               При запуске приложение само проверяет GitHub Releases. Если вышла
-              новая версия — скачает её в фоне и предложит перезапуск. Данные CRM
-              при этом не трогаются.
+              новая версия — скачает её в фоне и предложит установить. База CRM
+              хранится в AppData и при обновлении не удаляется.
             </p>
             <Button
               type="button"
@@ -431,9 +431,15 @@ export function SettingsPage() {
                     );
                     return;
                   }
+                  if (result.upToDate) {
+                    toast.success(
+                      `У вас актуальная версия ${result.current ?? result.version ?? ""}`.trim(),
+                    );
+                    return;
+                  }
                   toast.success(
                     result.version
-                      ? `Проверка выполнена (доступна ${result.version})`
+                      ? `Доступна новая версия ${result.version} (сейчас ${result.current ?? "?"}). Скачивание начнётся автоматически.`
                       : "Проверка обновлений запущена",
                   );
                 } finally {
@@ -442,6 +448,22 @@ export function SettingsPage() {
               }}
             >
               {checkingUpdates ? "Проверка…" : "Проверить обновления"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={async () => {
+                try {
+                  await apiFetch("/sync/run", { method: "POST" });
+                  toast.success("Синхронизация с облаком выполнена");
+                  void queryClient.invalidateQueries();
+                } catch (e) {
+                  if (e instanceof ApiError) toast.error(e.message);
+                  else toast.error("Не удалось синхронизировать");
+                }
+              }}
+            >
+              Синхронизировать сейчас
             </Button>
           </CardContent>
         </Card>
