@@ -501,6 +501,78 @@ def _upsert_cloud(table: str, payload: dict[str, Any]) -> None:
     )
 
 
+def push_menu_doc(
+    doc_id: str,
+    tabs: list[dict[str, Any]],
+    *,
+    updated_by_name: Optional[str] = None,
+) -> None:
+    """Upsert restaurant/takeaway menu snapshot to Supabase."""
+    if doc_id not in ("restaurant", "takeaway"):
+        return
+    if not _configured():
+        return
+    payload = {
+        "id": doc_id,
+        "tabs": tabs,
+        "updated_at": _now_iso(),
+        "updated_by_name": updated_by_name,
+    }
+    try:
+        _upsert_cloud("crm_menu_docs", payload)
+    except Exception:
+        logger.warning("push_menu_doc failed (%s)", doc_id, exc_info=True)
+
+
+def _pull_menu_docs() -> int:
+    """Pull menu snapshots; cloud wins when newer than local file mtime."""
+    from app.services.restaurant_menu import (
+        MENU_PATH,
+        TAKEAWAY_MENU_PATH,
+        apply_cloud_menu_doc,
+    )
+
+    touched = 0
+    try:
+        rows = _fetch_all("crm_menu_docs")
+    except Exception:
+        return 0
+    for row in rows:
+        doc_id = str(row.get("id") or "")
+        tabs = row.get("tabs")
+        if doc_id not in ("restaurant", "takeaway") or not isinstance(tabs, list):
+            continue
+        path = MENU_PATH if doc_id == "restaurant" else TAKEAWAY_MENU_PATH
+        remote_dt = _as_utc(_parse_datetime(row.get("updated_at")))
+        local_dt = None
+        if path.exists():
+            local_dt = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        if local_dt and remote_dt and remote_dt <= local_dt:
+            continue
+        apply_cloud_menu_doc(doc_id, tabs)
+        touched += 1
+    return touched
+
+
+def _seed_menu_docs_to_cloud() -> None:
+    """Push local custom menus once if cloud has no doc yet."""
+    from app.services.restaurant_menu import (
+        load_saved_menu,
+        load_saved_takeaway_menu,
+    )
+
+    try:
+        existing = {str(r.get("id")) for r in _fetch_all("crm_menu_docs")}
+    except Exception:
+        return
+    restaurant = load_saved_menu()
+    if restaurant and "restaurant" not in existing:
+        push_menu_doc("restaurant", restaurant)
+    takeaway = load_saved_takeaway_menu()
+    if takeaway and "takeaway" not in existing:
+        push_menu_doc("takeaway", takeaway)
+
+
 def _soft_delete_cloud(table: str, cloud_id: str, extra: Optional[dict] = None) -> None:
     body = {"deleted_at": _now_iso(), "updated_at": _now_iso()}
     if extra:
@@ -1504,6 +1576,14 @@ def run_full_sync(db: Session, *, seed_all: bool = True) -> dict[str, Any]:
                 except Exception as exc:
                     logger.warning("Sync pull %s failed: %s", name, exc, exc_info=True)
                     db.rollback()
+
+            try:
+                menu_touched = _pull_menu_docs()
+                if menu_touched:
+                    logger.info("Sync pull menus: %s doc(s)", menu_touched)
+                _seed_menu_docs_to_cloud()
+            except Exception as exc:
+                logger.warning("Menu sync failed: %s", exc, exc_info=True)
 
             if seed_all:
                 try:

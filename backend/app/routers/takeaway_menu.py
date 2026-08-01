@@ -71,7 +71,7 @@ def update_takeaway_menu(
     current_user: User = Depends(require_analytics_owner),
 ) -> TakeawayMenuResponse:
     tabs_data: list[dict[str, Any]] = [tab.model_dump() for tab in payload.tabs]
-    save_takeaway_menu(tabs_data)
+    save_takeaway_menu(tabs_data, updated_by=current_user.full_name or current_user.username)
     log_activity(
         db,
         user=current_user,

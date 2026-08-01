@@ -355,17 +355,23 @@ export function RoomsPage() {
                           {room.guest_phone ?? "телефон не указан"}
                         </div>
                         <div className="text-xs">
-                          {room.status === "booked" ? "Заселение в 13:00" : "Заселение"}:{" "}
-                          <span className="font-medium">
-                            {room.check_in ? formatDate(room.check_in) : "—"}
-                          </span>
                           {room.status === "booked" ? (
-                            <span className="text-muted-foreground">
-                              {" "}
-                              · бронь → занят
-                            </span>
+                            <>
+                              Заселение в 13:00:{" "}
+                              <span className="font-medium">
+                                {room.check_in ? formatDate(room.check_in) : "—"}
+                              </span>
+                              <span className="text-muted-foreground">
+                                {" "}
+                                · до заселения
+                              </span>
+                            </>
                           ) : (
                             <>
+                              В номере с{" "}
+                              <span className="font-medium">
+                                {room.check_in ? formatDate(room.check_in) : "—"}
+                              </span>
                               {" · "}
                               Выезд:{" "}
                               <span className="font-medium">

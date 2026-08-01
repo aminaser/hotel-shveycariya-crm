@@ -33,7 +33,7 @@ export const paymentStatusLabel: Record<string, string> = {
 
 export const roomStatusLabel: Record<string, string> = {
   free: "Свободно / Убрано",
-  occupied: "Занят",
+  occupied: "В номере",
   cleaning: "Свободно / Требуется уборка",
   maintenance: "Ремонт",
   booked: "Заселение в 13:00",

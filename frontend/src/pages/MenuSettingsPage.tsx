@@ -203,45 +203,48 @@ export function MenuSettingsPage() {
       price,
       ...(newDescription.trim() ? { description: newDescription.trim() } : {}),
     };
-    updateDraft((prev) =>
-      prev.map((tab) => {
-        if (tab.id !== activeTab.id) return tab;
-        return {
-          ...tab,
-          subcategories: tab.subcategories.map((sub) => {
-            if (sub.id !== activeSub.id) return sub;
-            const sections =
-              sub.sections.length > 0
-                ? sub.sections.map((section, idx) =>
-                    idx === sub.sections.length - 1
-                      ? { ...section, items: [...section.items, item] }
-                      : section,
-                  )
-                : [{ title: null, items: [item] }];
-            return { ...sub, sections };
-          }),
-        };
-      }),
-    );
+    const nextDraft = draft.map((tab) => {
+      if (tab.id !== activeTab.id) return tab;
+      return {
+        ...tab,
+        subcategories: tab.subcategories.map((sub) => {
+          if (sub.id !== activeSub.id) return sub;
+          const sections =
+            sub.sections.length > 0
+              ? sub.sections.map((section, idx) =>
+                  idx === sub.sections.length - 1
+                    ? { ...section, items: [...section.items, item] }
+                    : section,
+                )
+              : [{ title: null, items: [item] }];
+          return { ...sub, sections };
+        }),
+      };
+    });
+    setDraft(nextDraft);
+    setDirty(true);
     setNewName("");
     setNewPrice("");
     setNewDescription("");
-    toast.success("Позиция добавлена — не забудьте сохранить");
+    // Persist immediately — otherwise the position only lives in the draft
+    // until «Сохранить», and banquet/takeaway sheets never see it.
+    saveMutation.mutate(nextDraft);
   };
 
   const saveMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (tabs?: MenuTab[]) =>
       apiFetch<RestaurantMenuResponse>(apiPath, {
         method: "PUT",
-        body: JSON.stringify({ tabs: draft }),
+        body: JSON.stringify({ tabs: tabs ?? draft }),
       }),
     onSuccess: (data) => {
       queryClient.setQueryData([queryKey], data);
+      queryClient.invalidateQueries({ queryKey: [queryKey] });
       setDirty(false);
       toast.success(
         kind === "takeaway"
           ? "Меню на вынос сохранено"
-          : "Меню сохранено — цены обновлены для банкетов",
+          : "Меню сохранено — доступно в банкетах",
       );
     },
     onError: (e) => {
@@ -285,7 +288,7 @@ export function MenuSettingsPage() {
             Сбросить к стандартному
           </Button>
           <Button
-            onClick={() => saveMutation.mutate()}
+            onClick={() => saveMutation.mutate(undefined)}
             disabled={!dirty || saveMutation.isPending}
           >
             <Save className="h-4 w-4" />
@@ -492,13 +495,13 @@ export function MenuSettingsPage() {
                 />
               </div>
             </div>
-            <Button className="mt-3" onClick={addItem}>
+            <Button className="mt-3" onClick={addItem} disabled={saveMutation.isPending}>
               <Plus className="h-4 w-4" />
-              Добавить в список
+              {saveMutation.isPending ? "Сохранение…" : "Добавить и сохранить"}
             </Button>
             <p className="mt-2 text-xs text-muted-foreground">
-              После добавления нажмите «Сохранить» сверху, чтобы меню обновилось
-              {kind === "takeaway" ? " в заказах на вынос." : " в банкетах."}
+              Новая позиция сразу сохраняется и появляется в{" "}
+              {kind === "takeaway" ? "заказах на вынос" : "меню банкетов"}.
             </p>
           </div>
         </div>

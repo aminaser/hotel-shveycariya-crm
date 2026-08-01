@@ -1,13 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { apiFetch } from "@/api/client";
-import { cloneMenu, type RestaurantMenuResponse } from "@/hooks/useRestaurantMenu";
+import {
+  cloneMenu,
+  mergeMissingDefaultItems,
+  type RestaurantMenuResponse,
+} from "@/hooks/useRestaurantMenu";
 import { takeawayMenu as defaultTakeawayMenu, type MenuTab } from "@/lib/takeaway-menu";
 
 export type { RestaurantMenuResponse as TakeawayMenuResponse };
 
 export function resolveTakeawayMenu(tabs: MenuTab[] | null | undefined): MenuTab[] {
-  if (tabs && tabs.length > 0) return tabs;
+  if (tabs && tabs.length > 0) {
+    return mergeMissingDefaultItems(tabs, defaultTakeawayMenu);
+  }
   return defaultTakeawayMenu;
 }
 
