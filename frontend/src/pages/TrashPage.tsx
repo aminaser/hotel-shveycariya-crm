@@ -6,12 +6,7 @@ import { apiFetch, ApiError } from "@/api/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  type GuestRequest,
-  type SpaBooking,
-  isSupabaseConfigured,
-  supabase,
-} from "@/lib/supabase";
+import { type GuestRequest, type SpaBooking } from "@/lib/supabase";
 import { useAuthStore } from "@/stores/auth";
 
 interface CrmTrashItem {
@@ -31,7 +26,7 @@ interface TrashEntry {
   subtitle: string | null;
   deletedAt: string;
   crmItem?: CrmTrashItem;
-  supabaseId?: string;
+  localId?: string;
 }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -50,102 +45,24 @@ const SPA_SERVICE_LABEL: Record<string, string> = {
 };
 
 async function fetchSpaTrash(): Promise<SpaBooking[]> {
-  if (!supabase) return [];
-  const { data, error } = await supabase
-    .from("spa_bookings")
-    .select("*")
-    .not("deleted_at", "is", null)
-    .or("notes.is.null,notes.neq.__PURGED__")
-    .order("deleted_at", { ascending: false });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as SpaBooking[];
+  return apiFetch<SpaBooking[]>("/spa-bookings?deleted_only=true");
 }
 
 async function fetchRequestsTrash(): Promise<GuestRequest[]> {
-  if (!supabase) return [];
-  const { data, error } = await supabase
-    .from("requests")
-    .select("*")
-    .not("deleted_at", "is", null)
-    .or("source.is.null,source.neq.__purged__")
-    .order("deleted_at", { ascending: false });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as GuestRequest[];
+  return apiFetch<GuestRequest[]>("/guest-requests?deleted_only=true");
 }
 
-async function purgeSupabaseTable(table: "spa_bookings" | "requests"): Promise<void> {
-  const client = supabase;
-  if (!client) return;
-
-  const selectTrashIds = async (): Promise<string[]> => {
-    let query = client.from(table).select("id").not("deleted_at", "is", null);
-    query =
-      table === "requests"
-        ? query.or("source.is.null,source.neq.__purged__")
-        : query.or("notes.is.null,notes.neq.__PURGED__");
-    const { data, error } = await query;
-    if (error) throw new Error(error.message);
-    return (data ?? []).map((row) => row.id as string);
-  };
-
-  const ids = await selectTrashIds();
-  if (ids.length === 0) return;
-
-  const chunkSize = 100;
-  for (let i = 0; i < ids.length; i += chunkSize) {
-    const chunk = ids.slice(i, i + chunkSize);
-    // Prefer hard delete when RLS allows it (spa_bookings).
-    const { error: deleteError } = await client.from(table).delete().in("id", chunk);
-    if (deleteError) {
-      // requests table historically had no DELETE policy — hide via UPDATE instead.
-      const patch =
-        table === "requests"
-          ? { source: "__purged__" }
-          : { notes: "__PURGED__" };
-      const { error: updateError } = await client
-        .from(table)
-        .update(patch)
-        .in("id", chunk);
-      if (updateError) {
-        throw new Error(`${deleteError.message}; ${updateError.message}`);
-      }
-    }
-  }
-
-  // If DELETE returned OK but RLS removed 0 rows, force UPDATE hide.
-  const remaining = await selectTrashIds();
-  if (remaining.length > 0) {
-    for (let i = 0; i < remaining.length; i += chunkSize) {
-      const chunk = remaining.slice(i, i + chunkSize);
-      const patch =
-        table === "requests"
-          ? { source: "__purged__" }
-          : { notes: "__PURGED__" };
-      const { error: updateError } = await client
-        .from(table)
-        .update(patch)
-        .in("id", chunk);
-      if (updateError) throw new Error(updateError.message);
-    }
-  }
-
-  const stillLeft = await selectTrashIds();
-  if (stillLeft.length > 0) {
-    throw new Error(`не удалось убрать ${stillLeft.length} записей`);
-  }
-}
-
-async function restoreSupabaseRow(table: "spa_bookings" | "requests", id: string) {
-  if (!supabase) throw new Error("Supabase не настроен");
-  const { error } = await supabase.from(table).update({ deleted_at: null }).eq("id", id);
-  if (error) throw new Error(error.message);
-  if (table === "spa_bookings") {
+async function restoreLocalRow(kind: "spa" | "request", id: string) {
+  if (kind === "spa") {
+    await apiFetch(`/spa-bookings/${id}/restore`, { method: "POST" });
     try {
       await apiFetch(`/spa-payments/${id}/restore`, { method: "POST" });
     } catch {
       // Payment row may not exist for older bookings.
     }
+    return;
   }
+  await apiFetch(`/guest-requests/${id}/restore`, { method: "POST" });
 }
 
 function formatDateTime(iso: string): string {
@@ -176,14 +93,12 @@ export function TrashPage() {
   const { data: spaTrash = [], isLoading: spaLoading } = useQuery({
     queryKey: ["spa-bookings-trash"],
     queryFn: fetchSpaTrash,
-    enabled: isSupabaseConfigured,
     refetchInterval: 30_000,
   });
 
   const { data: requestsTrash = [], isLoading: requestsLoading } = useQuery({
     queryKey: ["requests-trash"],
     queryFn: fetchRequestsTrash,
-    enabled: isSupabaseConfigured,
     refetchInterval: 30_000,
   });
 
@@ -218,9 +133,9 @@ export function TrashPage() {
     },
   });
 
-  const restoreSupabase = useMutation({
-    mutationFn: ({ table, id }: { table: "spa_bookings" | "requests"; id: string }) =>
-      restoreSupabaseRow(table, id),
+  const restoreLocal = useMutation({
+    mutationFn: ({ kind, id }: { kind: "spa" | "request"; id: string }) =>
+      restoreLocalRow(kind, id),
     onSuccess: () => {
       toast.success("Запись восстановлена");
       invalidateAll();
@@ -244,16 +159,18 @@ export function TrashPage() {
         failures.push(`Журнал/клиенты/банкеты: ${msg}`);
       }
 
-      if (supabase) {
-        for (const table of ["spa_bookings", "requests"] as const) {
-          const label = table === "spa_bookings" ? "Сауна/баня" : "Заявки";
-          try {
-            await purgeSupabaseTable(table);
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : "ошибка";
-            failures.push(`${label}: ${msg}`);
-          }
-        }
+      try {
+        await apiFetch("/spa-bookings/trash", { method: "DELETE" });
+      } catch (e) {
+        const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "ошибка";
+        failures.push(`Сауна/баня: ${msg}`);
+      }
+
+      try {
+        await apiFetch("/guest-requests/trash", { method: "DELETE" });
+      } catch (e) {
+        const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "ошибка";
+        failures.push(`Заявки: ${msg}`);
       }
 
       if (failures.length > 0) {
@@ -295,7 +212,7 @@ export function TrashPage() {
         booking.room ? ` · номер ${booking.room}` : ""
       }`,
       deletedAt: booking.deleted_at as string,
-      supabaseId: booking.id,
+      localId: booking.id,
     })),
     ...requestsTrash.map((request): TrashEntry => ({
       key: `request-${request.id}`,
@@ -311,12 +228,12 @@ export function TrashPage() {
         .filter(Boolean)
         .join(" · "),
       deletedAt: request.deleted_at as string,
-      supabaseId: request.id,
+      localId: request.id,
     })),
   ].sort((a, b) => (a.deletedAt < b.deletedAt ? 1 : -1));
 
   const isLoading = crmLoading || spaLoading || requestsLoading;
-  const restorePending = restoreCrm.isPending || restoreSupabase.isPending;
+  const restorePending = restoreCrm.isPending || restoreLocal.isPending;
 
   return (
     <div className="p-6">
@@ -384,10 +301,10 @@ export function TrashPage() {
                 onClick={() => {
                   if (entry.kind === "crm" && entry.crmItem) {
                     restoreCrm.mutate(entry.crmItem);
-                  } else if (entry.supabaseId) {
-                    restoreSupabase.mutate({
-                      table: entry.kind === "spa" ? "spa_bookings" : "requests",
-                      id: entry.supabaseId,
+                  } else if (entry.localId) {
+                    restoreLocal.mutate({
+                      kind: entry.kind === "spa" ? "spa" : "request",
+                      id: entry.localId,
                     });
                   }
                 }}

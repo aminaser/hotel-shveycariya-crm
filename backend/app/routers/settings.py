@@ -28,7 +28,7 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 DB_PATH = DATA_DIR / "hotel_crm.db"
 SQLITE_HEADER = b"SQLite format 3\x00"
 # Auto-backup on exit creates a file every close — keep only the newest ones.
-MAX_BACKUPS = 20
+MAX_BACKUPS = 14
 
 
 def _prune_old_backups(keep: int = MAX_BACKUPS) -> None:

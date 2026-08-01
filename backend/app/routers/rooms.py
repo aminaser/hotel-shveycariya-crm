@@ -170,4 +170,7 @@ def update_room(
 
     db.commit()
     db.refresh(room)
+    from app.services.supabase_crm_sync import queue_entity_sync
+
+    queue_entity_sync("rooms", room)
     return _room_with_guest(db, room)

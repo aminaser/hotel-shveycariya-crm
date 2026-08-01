@@ -11,11 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  type SpaBooking,
-  isSupabaseConfigured,
-  supabase,
-} from "@/lib/supabase";
+import { type SpaBooking } from "@/lib/supabase";
 import { groupStays } from "@/lib/stay-groups";
 import { cn } from "@/lib/utils";
 
@@ -63,18 +59,9 @@ function formatTime(t: string | null): string {
 }
 
 async function fetchSpaRange(from: string, to: string): Promise<SpaBooking[]> {
-  if (!supabase) return [];
-  const { data, error } = await supabase
-    .from("spa_bookings")
-    .select("*")
-    .is("deleted_at", null)
-    .neq("status", "cancelled")
-    .gte("booking_date", from)
-    .lte("booking_date", to)
-    .order("booking_date", { ascending: true })
-    .order("slot_time", { ascending: true });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as SpaBooking[];
+  const qs = new URLSearchParams({ date_from: from, date_to: to });
+  const bookings = await apiFetch<SpaBooking[]>(`/spa-bookings?${qs}`);
+  return bookings.filter((b) => b.status !== "cancelled");
 }
 
 function buildEvents(
@@ -184,7 +171,6 @@ export function CalendarPage() {
   const { data: spa = [], isLoading: spaLoading } = useQuery({
     queryKey: ["spa-bookings", "calendar", rangeFrom, rangeTo],
     queryFn: () => fetchSpaRange(rangeFrom, rangeTo),
-    enabled: isSupabaseConfigured,
   });
 
   const events = useMemo(

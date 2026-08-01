@@ -16,9 +16,11 @@ from app.services.audit import log_activity, set_created_by, set_updated_by, sum
 from app.services.room_service import today_local
 from app.services.supabase_crm_sync import (
     ensure_cloud_id,
+    enqueue_outbox,
     soft_delete_banquet,
     sync_banquets,
     upsert_banquet,
+    _banquet_payload,
 )
 
 router = APIRouter(prefix="/banquets", tags=["banquets"])

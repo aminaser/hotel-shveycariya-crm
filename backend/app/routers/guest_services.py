@@ -96,6 +96,9 @@ def create_guest_service(
     )
     db.commit()
     db.refresh(row)
+    from app.services.supabase_crm_sync import queue_entity_sync
+
+    queue_entity_sync("guest_services", row)
     return row
 
 
@@ -135,6 +138,9 @@ def update_guest_service(
     )
     db.commit()
     db.refresh(row)
+    from app.services.supabase_crm_sync import queue_entity_sync
+
+    queue_entity_sync("guest_services", row)
     return row
 
 
@@ -163,4 +169,7 @@ def delete_guest_service(
         entity_label=f"{label}: {row.guest_name}",
     )
     db.commit()
+    from app.services.supabase_crm_sync import queue_entity_sync
+
+    queue_entity_sync("guest_services", row, soft_delete=True)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

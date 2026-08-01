@@ -68,6 +68,9 @@ def create_client(
     client, _created = find_or_create_client(db, payload, current_user)
     db.commit()
     db.refresh(client)
+    from app.services.supabase_crm_sync import queue_entity_sync
+
+    queue_entity_sync("clients", client)
     return client
 
 
@@ -156,6 +159,9 @@ def update_client(
     )
     db.commit()
     db.refresh(client)
+    from app.services.supabase_crm_sync import queue_entity_sync
+
+    queue_entity_sync("clients", client)
     return client
 
 
@@ -192,4 +198,7 @@ def delete_client(
         entity_label=name,
     )
     db.commit()
+    from app.services.supabase_crm_sync import queue_entity_sync
+
+    queue_entity_sync("clients", client, soft_delete=True)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

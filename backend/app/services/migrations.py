@@ -20,11 +20,14 @@ CLIENT_COLUMNS = {
     "created_by_name": "VARCHAR(255)",
     "updated_by_user_id": "INTEGER",
     "updated_by_name": "VARCHAR(255)",
+    "cloud_id": "VARCHAR(64)",
 }
 
 ROOM_COLUMNS = {
     "status_updated_at": "DATETIME",
     "price_per_night": "NUMERIC(12, 2)",
+    "cloud_id": "VARCHAR(64)",
+    "updated_at": "DATETIME",
 }
 
 BANQUET_COLUMNS = {
@@ -57,6 +60,11 @@ STAY_COLUMNS = {
     "prepayment": "NUMERIC(12, 2) DEFAULT 0",
     "group_id": "VARCHAR(36)",
     "checked_in_at": "DATETIME",
+    "cloud_id": "VARCHAR(64)",
+}
+
+GUEST_SERVICE_COLUMNS = {
+    "cloud_id": "VARCHAR(64)",
 }
 
 USER_COLUMNS = {
@@ -210,26 +218,39 @@ def run_migrations() -> None:
         for column, col_type in TAKEAWAY_COLUMNS.items():
             _add_column_if_missing(conn, "takeaway_orders", column, col_type)
 
-        # Stable UUID keys used for Supabase multi-PC sync.
-        conn.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ix_banquets_cloud_id "
-                "ON banquets (cloud_id)"
-            )
-        )
-        conn.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ix_takeaway_orders_cloud_id "
-                "ON takeaway_orders (cloud_id)"
-            )
-        )
         conn.commit()
 
         for column, col_type in STAY_COLUMNS.items():
             _add_column_if_missing(conn, "stays", column, col_type)
 
+        for column, col_type in GUEST_SERVICE_COLUMNS.items():
+            _add_column_if_missing(conn, "guest_services", column, col_type)
+
         for column, col_type in USER_COLUMNS.items():
             _add_column_if_missing(conn, "users", column, col_type)
+
+        # Stable UUID keys used for Supabase multi-PC sync.
+        inspector = inspect(engine)
+        existing_tables = set(inspector.get_table_names())
+        for table in (
+            "banquets",
+            "takeaway_orders",
+            "clients",
+            "rooms",
+            "stays",
+            "guest_services",
+            "spa_bookings_local",
+            "guest_requests_local",
+        ):
+            if table not in existing_tables:
+                continue
+            conn.execute(
+                text(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS ix_{table}_cloud_id "
+                    f"ON {table} (cloud_id)"
+                )
+            )
+        conn.commit()
 
         # Split planned vs actual checkout: previously check_out held the planned
         # departure date, which blocked the «Выезд» action whenever a date was set.

@@ -33,6 +33,14 @@ import { useAuthStore, canManageMenu, canViewAnalytics } from "@/stores/auth";
 import { useBadgeStore } from "@/stores/badges";
 import { cn } from "@/lib/utils";
 
+interface SyncStatus {
+  online: boolean;
+  syncing: boolean;
+  last_sync_at: string | null;
+  last_error: string | null;
+  pending_outbox: number;
+}
+
 const navItems = [
   { to: "/registry", label: "Журнал", icon: BookOpen },
   { to: "/bookings", label: "Бронь в отеле", icon: CalendarDays },
@@ -132,6 +140,28 @@ export function AppLayout({ children }: { children?: ReactNode }) {
     queryFn: () => apiFetch<AppSettings>("/settings"),
   });
 
+  const { data: syncStatus } = useQuery({
+    queryKey: ["sync-status"],
+    queryFn: () => apiFetch<SyncStatus>("/sync/status"),
+    refetchInterval: 10_000,
+  });
+
+  const syncLabel = !syncStatus
+    ? null
+    : !syncStatus.online
+      ? "Офлайн"
+      : syncStatus.syncing || syncStatus.pending_outbox > 0
+        ? "Синхронизация…"
+        : "Синхронизировано";
+
+  const syncClass = !syncStatus
+    ? ""
+    : !syncStatus.online
+      ? "bg-amber-500/15 text-amber-700"
+      : syncStatus.syncing || syncStatus.pending_outbox > 0
+        ? "bg-sky-500/15 text-sky-700"
+        : "bg-emerald-500/15 text-emerald-700";
+
   const handleLogout = async () => {
     try {
       if (token) {
@@ -197,7 +227,26 @@ export function AppLayout({ children }: { children?: ReactNode }) {
         </div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-end border-b border-border bg-card px-6 py-3">
+        <header className="flex items-center justify-between gap-4 border-b border-border bg-card px-6 py-3">
+          <div>
+            {syncLabel ? (
+              <span
+                className={cn(
+                  "inline-flex items-center rounded-md px-2 py-1 text-xs font-medium",
+                  syncClass,
+                )}
+                title={
+                  syncStatus?.last_error
+                    ? syncStatus.last_error
+                    : syncStatus?.last_sync_at
+                      ? `Последняя синхронизация: ${syncStatus.last_sync_at}`
+                      : undefined
+                }
+              >
+                {syncLabel}
+              </span>
+            ) : null}
+          </div>
           <div className="text-sm text-muted-foreground">
             👤{" "}
             <span className="font-medium text-foreground">

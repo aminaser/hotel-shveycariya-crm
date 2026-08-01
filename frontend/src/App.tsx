@@ -6,6 +6,7 @@ import { apiFetch } from "@/api/client";
 import { AutoBackupOnExit } from "@/components/AutoBackupOnExit";
 import { OwnerRoute } from "@/components/OwnerRoute";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { ToastClearAll } from "@/components/ToastClearAll";
 import { ActsPage } from "@/pages/ActsPage";
 import { ActivityPage } from "@/pages/ActivityPage";
 import { AnalyticsPage } from "@/pages/AnalyticsPage";
@@ -122,10 +123,19 @@ export default function App() {
       <Toaster
         position="top-right"
         richColors
-        duration={2000}
+        duration={Infinity}
         closeButton
-        toastOptions={{ duration: 2000 }}
+        offset={56}
+        toastOptions={{
+          duration: Infinity,
+          closeButton: true,
+          classNames: {
+            toast: "crm-toast",
+            closeButton: "crm-toast-close",
+          },
+        }}
       />
+      <ToastClearAll />
     </HashRouter>
   );
 }

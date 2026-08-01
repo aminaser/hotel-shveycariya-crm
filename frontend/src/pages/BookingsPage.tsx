@@ -42,8 +42,6 @@ import { groupStays } from "@/lib/stay-groups";
 import {
   type SpaBooking,
   type SpaPayment,
-  isSupabaseConfigured,
-  supabase,
 } from "@/lib/supabase";
 import { toast, toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -125,23 +123,15 @@ function stayGuestLabel(stay: Stay): string {
 }
 
 async function fetchSpaBookings(): Promise<SpaBooking[]> {
-  if (!supabase) return [];
   const from = new Date();
   from.setDate(from.getDate() - 60);
   const to = new Date();
   to.setDate(to.getDate() + 90);
   const fromStr = from.toISOString().slice(0, 10);
   const toStr = to.toISOString().slice(0, 10);
-  const { data, error } = await supabase
-    .from("spa_bookings")
-    .select("*")
-    .is("deleted_at", null)
-    .neq("status", "cancelled")
-    .gte("booking_date", fromStr)
-    .lte("booking_date", toStr)
-    .order("booking_date", { ascending: true });
-  if (error) throw new Error(error.message);
-  const bookings = (data ?? []) as SpaBooking[];
+  const qs = new URLSearchParams({ date_from: fromStr, date_to: toStr });
+  const raw = await apiFetch<SpaBooking[]>(`/spa-bookings?${qs}`);
+  const bookings = raw.filter((b) => b.status !== "cancelled");
   if (bookings.length === 0) return bookings;
   try {
     const ids = bookings.map((b) => b.id).join(",");
@@ -330,7 +320,6 @@ export function BookingsPage() {
   const { data: spa = [], isLoading: loadingSpa } = useQuery({
     queryKey: ["bookings-spa"],
     queryFn: fetchSpaBookings,
-    enabled: isSupabaseConfigured,
   });
 
   const { data: guestServices = [], isLoading: loadingServices } = useQuery({
@@ -601,12 +590,6 @@ export function BookingsPage() {
           </tbody>
         </table>
       </div>
-
-      {!isSupabaseConfigured && (
-        <p className="mt-3 text-xs text-muted-foreground">
-          Сауна/баня не подключена (нет Supabase) — в списке только отель, банкеты и услуги.
-        </p>
-      )}
 
       <Dialog open={serviceOpen} onOpenChange={setServiceOpen}>
         <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">

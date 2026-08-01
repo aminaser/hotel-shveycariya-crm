@@ -4,7 +4,6 @@ import { toast } from "@/lib/toast";
 
 import { apiFetch } from "@/api/client";
 import type { Banquet, Client, Stay, TakeawayOrder } from "@/api/types";
-import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import type { GuestRequest, SpaBooking } from "@/lib/supabase";
 import { useBadgeStore } from "@/stores/badges";
 
@@ -55,25 +54,11 @@ const WATCHED: WatchedQuery[] = [
 ];
 
 async function fetchRequestsBackground(): Promise<GuestRequest[]> {
-  if (!supabase) return [];
-  const { data, error } = await supabase
-    .from("requests")
-    .select("*")
-    .is("deleted_at", null)
-    .order("created_at", { ascending: false });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as GuestRequest[];
+  return apiFetch<GuestRequest[]>("/guest-requests");
 }
 
 async function fetchSpaBackground(): Promise<SpaBooking[]> {
-  if (!supabase) return [];
-  const { data, error } = await supabase
-    .from("spa_bookings")
-    .select("*")
-    .is("deleted_at", null)
-    .order("created_at", { ascending: false });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as SpaBooking[];
+  return apiFetch<SpaBooking[]>("/spa-bookings");
 }
 
 /**
@@ -84,7 +69,6 @@ export function useBackgroundPolling() {
   useQuery({
     queryKey: ["bg-guest-requests"],
     queryFn: fetchRequestsBackground,
-    enabled: isSupabaseConfigured,
     refetchInterval: 15_000,
     refetchIntervalInBackground: true,
   });
@@ -92,7 +76,6 @@ export function useBackgroundPolling() {
   useQuery({
     queryKey: ["bg-spa-bookings"],
     queryFn: fetchSpaBackground,
-    enabled: isSupabaseConfigured,
     refetchInterval: 15_000,
     refetchIntervalInBackground: true,
   });

@@ -30,6 +30,36 @@ body {
   min-height: 100vh;
 }
 
+/* Visible dismiss control — sonner's default X is easy to miss / hard to hit. */
+[data-sonner-toaster] [data-close-button].crm-toast-close,
+[data-sonner-toaster] [data-close-button] {
+  left: auto !important;
+  right: 0.35rem !important;
+  top: 0.35rem !important;
+  transform: none !important;
+  width: 1.5rem !important;
+  height: 1.5rem !important;
+  border: 1px solid rgba(15, 23, 42, 0.18) !important;
+  background: #ffffff !important;
+  color: #0f172a !important;
+  opacity: 1 !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+  cursor: pointer;
+}
+
+[data-sonner-toaster] [data-close-button]:hover {
+  background: #f1f5f9 !important;
+}
+
+[data-sonner-toaster] [data-sonner-toast].crm-toast {
+  padding-right: 2rem !important;
+}
+
+/* Keep clear-all above sonner (sonner defaults to a very high z-index). */
+[data-sonner-toaster] {
+  z-index: 2147483000 !important;
+}
+
 @media print {
   aside,
   .no-print {

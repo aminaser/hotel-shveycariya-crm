@@ -43,7 +43,6 @@ import {
   type SpaBookingStatus,
   type SpaPayment,
   type SpaService,
-  isSupabaseConfigured,
   supabase,
 } from "@/lib/supabase";
 
@@ -148,17 +147,8 @@ function emptyForm(prices: SpaPrices = DEFAULT_SPA_PRICES): SpaForm {
 }
 
 async function fetchBookings(dateFrom: string, dateTo: string): Promise<SpaBooking[]> {
-  if (!supabase) return [];
-  const { data, error } = await supabase
-    .from("spa_bookings")
-    .select("*")
-    .is("deleted_at", null)
-    .gte("booking_date", dateFrom)
-    .lte("booking_date", dateTo)
-    .order("booking_date", { ascending: false })
-    .order("slot_time", { ascending: false });
-  if (error) throw new Error(error.message);
-  const bookings = (data ?? []) as SpaBooking[];
+  const qs = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
+  const bookings = await apiFetch<SpaBooking[]>(`/spa-bookings?${qs}`);
   if (bookings.length === 0) return bookings;
 
   const ids = bookings.map((b) => b.id).join(",");
@@ -212,23 +202,21 @@ async function createBooking(
     payment_date: string | null;
   },
 ) {
-  if (!supabase) throw new Error("Supabase не настроен");
-  const { data, error } = await supabase
-    .from("spa_bookings")
-    .insert({
+  const created = await apiFetch<SpaBooking>("/spa-bookings", {
+    method: "POST",
+    body: JSON.stringify({
       ...payload,
       guest_phone: payload.guest_phone || null,
       room: payload.room || null,
       notes: payload.notes || null,
-      created_by_name: authorName,
-      updated_by_name: authorName,
-    })
-    .select("id")
-    .single();
-  if (error) throw new Error(error.message);
-  if (!data?.id) throw new Error("Не удалось получить id записи");
+      payment_method: payment.payment_method,
+      payment_date: payment.payment_date,
+      price: payment.amount,
+    }),
+  });
+  void authorName;
   await upsertSpaPayment({
-    booking_id: data.id,
+    booking_id: created.id,
     amount: payment.amount,
     payment_method: payment.payment_method,
     payment_date: payment.payment_date,
@@ -245,18 +233,19 @@ async function updateBooking(
     payment_date: string | null;
   },
 ) {
-  if (!supabase) throw new Error("Supabase не настроен");
-  const { error } = await supabase
-    .from("spa_bookings")
-    .update({
+  void authorName;
+  await apiFetch(`/spa-bookings/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
       ...payload,
       guest_phone: payload.guest_phone || null,
       room: payload.room || null,
       notes: payload.notes || null,
-      updated_by_name: authorName,
-    })
-    .eq("id", id);
-  if (error) throw new Error(error.message);
+      payment_method: payment.payment_method,
+      payment_date: payment.payment_date,
+      price: payment.amount,
+    }),
+  });
   await upsertSpaPayment({
     booking_id: id,
     amount: payment.amount,
@@ -266,12 +255,8 @@ async function updateBooking(
 }
 
 async function softDeleteBooking(id: string, authorName: string) {
-  if (!supabase) throw new Error("Supabase не настроен");
-  const { error } = await supabase
-    .from("spa_bookings")
-    .update({ deleted_at: new Date().toISOString(), updated_by_name: authorName })
-    .eq("id", id);
-  if (error) throw new Error(error.message);
+  void authorName;
+  await apiFetch(`/spa-bookings/${id}`, { method: "DELETE" });
   try {
     await apiFetch(`/spa-payments/${id}`, { method: "DELETE" });
   } catch {
@@ -281,20 +266,13 @@ async function softDeleteBooking(id: string, authorName: string) {
 
 
 async function updateBookingStatus(id: string, status: SpaBookingStatus, authorName: string) {
-  if (!supabase) throw new Error("Supabase не настроен");
-  const { error } = await supabase
-    .from("spa_bookings")
-    .update({ status, updated_by_name: authorName })
-    .eq("id", id);
-  if (error) throw new Error(error.message);
+  void authorName;
+  const updated = await apiFetch<SpaBooking>(`/spa-bookings/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
 
-  // Keep linked guest request in sync when possible.
-  const { data } = await supabase
-    .from("spa_bookings")
-    .select("request_id")
-    .eq("id", id)
-    .maybeSingle();
-  if (data?.request_id) {
+  if (updated.request_id) {
     const stage =
       status === "confirmed"
         ? "assigned"
@@ -303,10 +281,14 @@ async function updateBookingStatus(id: string, status: SpaBookingStatus, authorN
           : status === "cancelled"
             ? "done"
             : "received";
-    await supabase
-      .from("requests")
-      .update({ stage, updated_by_name: authorName })
-      .eq("id", data.request_id);
+    try {
+      await apiFetch(`/guest-requests/${updated.request_id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ stage }),
+      });
+    } catch {
+      // Request may be missing locally yet.
+    }
   }
 }
 
@@ -399,7 +381,6 @@ export function SpaJournalPage() {
   const { data: bookings = [], isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ["spa-bookings", dateFrom, dateTo],
     queryFn: () => fetchBookings(dateFrom, dateTo),
-    enabled: isSupabaseConfigured,
     refetchInterval: 15_000,
   });
 
@@ -605,17 +586,6 @@ export function SpaJournalPage() {
     );
     if (match) setSelectedStayId(String(match.id));
   }, [dialogOpen, form.is_hotel_guest, form.guest_name, form.room, hotelGuestOptions, selectedStayId]);
-
-  if (!isSupabaseConfigured) {
-    return (
-      <div className="p-6">
-        <h1 className="text-2xl font-bold">Журнал сауны / бани</h1>
-        <p className="mt-2 text-muted-foreground">
-          Supabase не настроен. Добавьте VITE_SUPABASE_URL и VITE_SUPABASE_ANON_KEY.
-        </p>
-      </div>
-    );
-  }
 
   return (
     <div className="p-6">

@@ -379,6 +379,14 @@ def create_stay(
     stay = _active_stays(db).filter(Stay.id == stay.id).first()
     assert stay is not None
 
+    from app.services.supabase_crm_sync import queue_entity_sync
+
+    if stay.client:
+        queue_entity_sync("clients", stay.client)
+    if stay.room:
+        queue_entity_sync("rooms", stay.room)
+    queue_entity_sync("stays", stay)
+
     try:
         if stay.client and stay.room:
             sync_checkin(
@@ -489,6 +497,10 @@ def update_stay(
     db.commit()
     stay = _active_stays(db).filter(Stay.id == stay_id).first()
     assert stay is not None
+
+    from app.services.supabase_crm_sync import queue_entity_sync
+
+    queue_entity_sync("stays", stay)
 
     try:
         if stay.room and stay.client:

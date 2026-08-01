@@ -3,18 +3,13 @@ import { RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "@/lib/toast";
 
+import { apiFetch } from "@/api/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AuthorshipMeta } from "@/components/AuthorshipMeta";
 import { logClientActivity } from "@/lib/activity";
-import {
-  type GuestRequest,
-  type RequestStage,
-  isSupabaseConfigured,
-  supabase,
-} from "@/lib/supabase";
-import { useAuthStore } from "@/stores/auth";
+import { type GuestRequest, type RequestStage, supabase } from "@/lib/supabase";
 
 const STAGE_LABEL: Record<RequestStage, string> = {
   received: "Новая",
@@ -38,47 +33,18 @@ function isArchived(request: GuestRequest): boolean {
 }
 
 async function fetchRequests(): Promise<GuestRequest[]> {
-  if (!supabase) return [];
-  const { data, error } = await supabase
-    .from("requests")
-    .select("*")
-    .is("deleted_at", null)
-    .order("created_at", { ascending: false });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as GuestRequest[];
+  return apiFetch<GuestRequest[]>("/guest-requests");
 }
 
-async function softDeleteRequest(id: string, authorName: string) {
-  if (!supabase) throw new Error("Supabase не настроен");
-  const { error } = await supabase
-    .from("requests")
-    .update({ deleted_at: new Date().toISOString(), updated_by_name: authorName })
-    .eq("id", id);
-  if (error) throw new Error(error.message);
+async function softDeleteRequest(id: string) {
+  await apiFetch(`/guest-requests/${id}`, { method: "DELETE" });
 }
 
-async function updateStage(id: string, stage: RequestStage, authorName: string) {
-  if (!supabase) throw new Error("Supabase не настроен");
-  const patch: Record<string, string> = { stage, updated_by_name: authorName };
-  if (stage === "assigned") patch.confirmed_by_name = authorName;
-  const { error } = await supabase.from("requests").update(patch).eq("id", id);
-  if (error) throw new Error(error.message);
-
-  // Mirror sauna/banya request status into spa journal when linked by request_id.
-  const spaStatus =
-    stage === "assigned"
-      ? "confirmed"
-      : stage === "done"
-        ? "done"
-        : stage === "received"
-          ? "pending"
-          : null;
-  if (spaStatus) {
-    await supabase
-      .from("spa_bookings")
-      .update({ status: spaStatus, updated_by_name: authorName })
-      .eq("request_id", id);
-  }
+async function updateStage(id: string, stage: RequestStage) {
+  await apiFetch(`/guest-requests/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ stage }),
+  });
 }
 
 function formatTime(iso: string) {
@@ -113,13 +79,11 @@ function getActionButtons(request: GuestRequest): { label: string; stage: Reques
 
 export function RequestsPage() {
   const queryClient = useQueryClient();
-  const authorName = useAuthStore((s) => s.user?.full_name ?? s.username ?? "Пользователь");
   const [filter, setFilter] = useState<"all" | "archive" | RequestStage>("all");
 
   const { data: requests = [], isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ["guest-requests"],
     queryFn: fetchRequests,
-    enabled: isSupabaseConfigured,
     refetchInterval: 15_000,
   });
 
@@ -142,7 +106,7 @@ export function RequestsPage() {
 
   const stageMutation = useMutation({
     mutationFn: ({ id, stage }: { id: string; stage: RequestStage }) =>
-      updateStage(id, stage, authorName),
+      updateStage(id, stage),
     onSuccess: (_data, vars) => {
       toast.success("Статус обновлён");
       void logClientActivity({
@@ -158,7 +122,7 @@ export function RequestsPage() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => softDeleteRequest(id, authorName),
+    mutationFn: (id: string) => softDeleteRequest(id),
     onSuccess: (_data, id) => {
       toast.success("Заявка перемещена в корзину");
       void logClientActivity({
@@ -181,17 +145,6 @@ export function RequestsPage() {
         ? current
         : current.filter((r) => r.stage === filter);
   const activeCount = current.filter((r) => r.stage !== "done").length;
-
-  if (!isSupabaseConfigured) {
-    return (
-      <div className="p-6">
-        <h1 className="text-2xl font-bold">Заявки</h1>
-        <p className="mt-2 text-muted-foreground">
-          Supabase не настроен. Добавьте VITE_SUPABASE_URL и VITE_SUPABASE_ANON_KEY в .env
-        </p>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6 p-6">

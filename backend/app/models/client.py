@@ -23,6 +23,9 @@ class Client(Base):
     deleted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    cloud_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
     created_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_by_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     updated_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
