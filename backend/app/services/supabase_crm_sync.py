@@ -1331,6 +1331,125 @@ def purge_old_trash(db: Session) -> int:
     return removed
 
 
+def _takeaway_score(order: TakeawayOrder) -> tuple:
+    return (
+        len(order.dishes or ""),
+        float(order.prepayment or 0),
+        _as_utc(order.updated_at) or datetime.min.replace(tzinfo=timezone.utc),
+        order.id or 0,
+    )
+
+
+def _dedupe_local_takeaways(db: Session) -> int:
+    """Soft-delete local takeaway clones left by pre-fix sync (same date/name/time)."""
+    active = (
+        db.query(TakeawayOrder)
+        .filter(TakeawayOrder.deleted_at.is_(None))
+        .order_by(TakeawayOrder.id.asc())
+        .all()
+    )
+    groups: dict[tuple, list[TakeawayOrder]] = {}
+    for order in active:
+        key = (
+            order.order_date.isoformat() if order.order_date else "",
+            _norm_name(order.guest_name),
+            (order.order_time or "").strip(),
+        )
+        groups.setdefault(key, []).append(order)
+
+    removed = 0
+    now = datetime.now(timezone.utc)
+    for items in groups.values():
+        if len(items) < 2:
+            continue
+        items_sorted = sorted(items, key=_takeaway_score, reverse=True)
+        keep = items_sorted[0]
+        # Prefer cloud_id of the row that already matches cloud (usually newest created).
+        newest = max(items, key=lambda r: (_as_utc(r.created_at) or datetime.min.replace(tzinfo=timezone.utc), r.id or 0))
+        adopt = newest.cloud_id or keep.cloud_id
+        for loser in items_sorted[1:]:
+            loser_cloud = loser.cloud_id
+            if loser_cloud and loser_cloud == adopt:
+                loser.cloud_id = None
+            loser.deleted_at = now
+            removed += 1
+            if loser_cloud and loser_cloud != adopt:
+                try:
+                    _soft_delete_cloud("crm_takeaway_orders", loser_cloud)
+                except Exception:
+                    pass
+                enqueue_outbox(db, "takeaways", loser_cloud, "delete")
+        if adopt and keep.cloud_id != adopt:
+            # Free unique index if a soft-deleted row still holds it.
+            for other in active:
+                if other.id != keep.id and other.cloud_id == adopt:
+                    other.cloud_id = None
+            keep.cloud_id = adopt
+        ensure_cloud_id(keep)
+        enqueue_outbox(db, "takeaways", keep.cloud_id, "upsert", _takeaway_payload(keep))
+    return removed
+
+
+def _dedupe_local_banquets(db: Session) -> int:
+    active = (
+        db.query(Banquet)
+        .filter(Banquet.deleted_at.is_(None))
+        .order_by(Banquet.id.asc())
+        .all()
+    )
+    groups: dict[tuple, list[Banquet]] = {}
+    for row in active:
+        key = (
+            row.event_date.isoformat() if row.event_date else "",
+            _norm_name(row.guest_name),
+            (row.event_time or "").strip(),
+        )
+        groups.setdefault(key, []).append(row)
+    removed = 0
+    now = datetime.now(timezone.utc)
+    for items in groups.values():
+        if len(items) < 2:
+            continue
+        items_sorted = sorted(
+            items,
+            key=lambda r: (
+                len(r.dishes or ""),
+                float(r.prepayment or 0),
+                _as_utc(r.updated_at) or datetime.min.replace(tzinfo=timezone.utc),
+                r.id or 0,
+            ),
+            reverse=True,
+        )
+        keep = items_sorted[0]
+        newest = max(
+            items,
+            key=lambda r: (
+                _as_utc(r.created_at) or datetime.min.replace(tzinfo=timezone.utc),
+                r.id or 0,
+            ),
+        )
+        adopt = newest.cloud_id or keep.cloud_id
+        for loser in items_sorted[1:]:
+            loser_cloud = loser.cloud_id
+            if loser_cloud and loser_cloud == adopt:
+                loser.cloud_id = None
+            loser.deleted_at = now
+            removed += 1
+            if loser_cloud and loser_cloud != adopt:
+                try:
+                    _soft_delete_cloud("crm_banquets", loser_cloud)
+                except Exception:
+                    pass
+        if adopt and keep.cloud_id != adopt:
+            for other in active:
+                if other.id != keep.id and other.cloud_id == adopt:
+                    other.cloud_id = None
+            keep.cloud_id = adopt
+        ensure_cloud_id(keep)
+        enqueue_outbox(db, "banquets", keep.cloud_id, "upsert", _banquet_payload(keep))
+    return removed
+
+
 def _set_state(db: Session, entity: str, status: str, error: Optional[str] = None) -> None:
     state = db.query(SyncState).filter(SyncState.entity_type == entity).first()
     if state is None:
@@ -1393,6 +1512,15 @@ def run_full_sync(db: Session, *, seed_all: bool = True) -> dict[str, Any]:
                 except Exception as exc:
                     logger.warning("Outbox seed failed: %s", exc, exc_info=True)
                     db.rollback()
+
+            try:
+                deduped = _dedupe_local_takeaways(db) + _dedupe_local_banquets(db)
+                if deduped:
+                    logger.info("Local dedupe removed %s clone(s)", deduped)
+                db.commit()
+            except Exception as exc:
+                logger.warning("Local dedupe failed: %s", exc, exc_info=True)
+                db.rollback()
 
             flushed = 0
             purged = 0
