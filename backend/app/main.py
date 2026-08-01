@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import logging
+import threading
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.config import settings
-from app.core.database import Base, engine
+from app.core.config import DATA_DIR, RECOVERED_DB_FROM, settings
+from app.core.database import Base, SessionLocal, engine
 from app.services.migrations import run_migrations
+from app.services.supabase_crm_sync import run_full_sync
 from app.routers import (
     activity,
     acts,
@@ -56,14 +60,13 @@ API_PREFIX = "/api/v1"
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    log = logging.getLogger("crm")
+    log.info("DATA_DIR=%s", DATA_DIR)
+    if RECOVERED_DB_FROM:
+        log.warning("Recovered SQLite database from %s", RECOVERED_DB_FROM)
+
     Base.metadata.create_all(bind=engine)
     run_migrations()
-
-    import threading
-    import time
-
-    from app.core.database import SessionLocal
-    from app.services.supabase_crm_sync import run_full_sync
 
     stop = threading.Event()
 

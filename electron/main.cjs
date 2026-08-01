@@ -120,7 +120,89 @@ function getPythonPath(backendDir) {
 function getDataDir() {
   const dir = path.join(app.getPath("userData"), "data");
   fs.mkdirSync(path.join(dir, "backups"), { recursive: true });
+  recoverDatabaseInto(dir);
   return dir;
+}
+
+/**
+ * DB used to live under resources/backend/data (wiped on every NSIS update).
+ * Copy the largest surviving hotel_crm*.db into AppData before Python starts.
+ */
+function recoverDatabaseInto(dataDir) {
+  const target = path.join(dataDir, "hotel_crm.db");
+  try {
+    if (fs.existsSync(target) && fs.statSync(target).size > 1024) return;
+  } catch {
+    // continue
+  }
+
+  const candidates = [];
+  const pushIfDb = (filePath) => {
+    try {
+      if (filePath && fs.existsSync(filePath) && fs.statSync(filePath).size > 1024) {
+        candidates.push(filePath);
+      }
+    } catch {
+      // ignore
+    }
+  };
+  const pushBackups = (dirPath) => {
+    try {
+      if (!dirPath || !fs.existsSync(dirPath)) return;
+      for (const name of fs.readdirSync(dirPath)) {
+        if (/^hotel_crm.*\.db$/i.test(name) && !name.includes("-wal") && !name.includes("-shm")) {
+          pushIfDb(path.join(dirPath, name));
+        }
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  if (!isDev && process.resourcesPath) {
+    const legacy = path.join(process.resourcesPath, "backend", "data");
+    pushIfDb(path.join(legacy, "hotel_crm.db"));
+    pushBackups(path.join(legacy, "backups"));
+  }
+
+  const localApp = process.env.LOCALAPPDATA || "";
+  if (localApp) {
+    const programs = path.join(localApp, "Programs");
+    for (const name of [
+      "Hotel Shveycariya CRM.__old",
+      "HotelShveycariyaCRM.__old",
+      "Hotel Shveycariya CRM",
+      "HotelShveycariyaCRM",
+    ]) {
+      const legacy = path.join(programs, name, "resources", "backend", "data");
+      pushIfDb(path.join(legacy, "hotel_crm.db"));
+      pushBackups(path.join(legacy, "backups"));
+    }
+  }
+
+  pushBackups(path.join(dataDir, "backups"));
+
+  if (candidates.length === 0) return;
+
+  candidates.sort((a, b) => {
+    try {
+      return fs.statSync(b).size - fs.statSync(a).size;
+    } catch {
+      return 0;
+    }
+  });
+  const best = candidates[0];
+  try {
+    fs.copyFileSync(best, target);
+    for (const suffix of ["-wal", "-shm"]) {
+      const side = best + suffix;
+      if (fs.existsSync(side)) fs.copyFileSync(side, target + suffix);
+    }
+    console.log(`[data] recovered database from ${best}`);
+    backendLog += `recovered_db_from=${best}\n`;
+  } catch (error) {
+    console.error("[data] recovery failed:", error);
+  }
 }
 
 function getLogPath() {
