@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.config import settings
 from app.models.banquet import Banquet, BanquetPaymentStatus
 from app.models.client import Client
+from app.models.employee import Employee
 from app.models.guest_request_local import GuestRequestLocal
 from app.models.guest_service import GuestService
 from app.models.room import Room, RoomStatus
@@ -28,6 +29,7 @@ from app.models.spa_booking_local import SpaBookingLocal
 from app.models.stay import PaymentStatus, Stay, StayType
 from app.models.sync_meta import SyncOutbox, SyncState
 from app.models.takeaway_order import TakeawayOrder
+from app.models.timesheet_shift import TimesheetShift
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +176,20 @@ def _remote_is_newer(local_updated: Optional[datetime], remote_updated: Any) -> 
     if local_dt is None:
         return True
     return remote_dt > local_dt
+
+
+def _norm_name(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _adopt_cloud_id(entity: Any, cloud_id: str) -> None:
+    """Bind a local row to the cloud identity (prevents duplicate inserts)."""
+    if not cloud_id:
+        return
+    current = getattr(entity, "cloud_id", None)
+    if current and current != cloud_id:
+        return
+    entity.cloud_id = cloud_id
 
 
 def _now_iso() -> str:
@@ -432,6 +448,36 @@ def _request_payload(row: GuestRequestLocal) -> dict[str, Any]:
     }
 
 
+def _employee_payload(employee: Employee) -> dict[str, Any]:
+    return {
+        "id": ensure_cloud_id(employee),
+        "crm_id": employee.id,
+        "full_name": employee.full_name,
+        "position": employee.position or "официант",
+        "hourly_rate": employee.hourly_rate or Decimal("750"),
+        "deleted_at": employee.deleted_at,
+        "updated_at": _now_iso(),
+    }
+
+
+def _timesheet_shift_payload(shift: TimesheetShift) -> dict[str, Any]:
+    employee = shift.employee
+    employee_cloud = ensure_cloud_id(employee) if employee else None
+    return {
+        "id": ensure_cloud_id(shift),
+        "crm_id": shift.id,
+        "employee_cloud_id": employee_cloud,
+        "employee_name": employee.full_name if employee else None,
+        "work_date": shift.work_date,
+        "start_time": shift.start_time,
+        "end_time": shift.end_time,
+        "workplace": shift.workplace,
+        "hourly_rate": shift.hourly_rate or Decimal("750"),
+        "deleted_at": shift.deleted_at,
+        "updated_at": _now_iso(),
+    }
+
+
 ENTITY_CLOUD_TABLE = {
     "banquets": "crm_banquets",
     "takeaways": "crm_takeaway_orders",
@@ -439,6 +485,8 @@ ENTITY_CLOUD_TABLE = {
     "rooms": "crm_rooms",
     "stays": "crm_stays",
     "guest_services": "crm_guest_services",
+    "employees": "crm_employees",
+    "timesheet_shifts": "crm_timesheet_shifts",
     "spa_bookings": "spa_bookings",
     "guest_requests": "requests",
 }
@@ -486,6 +534,31 @@ def _pull_banquets(db: Session) -> int:
         if not event_date or not guest_name:
             continue
         local = db.query(Banquet).filter(Banquet.cloud_id == cloud_id).first()
+        if local is None:
+            # Same banquet already local without cloud_id (second PC seed race).
+            q = db.query(Banquet).filter(
+                Banquet.cloud_id.is_(None),
+                Banquet.event_date == event_date,
+                Banquet.guest_name == guest_name,
+            )
+            event_time = row.get("event_time")
+            if event_time:
+                q = q.filter(Banquet.event_time == event_time)
+            local = q.first()
+            if local:
+                _adopt_cloud_id(local, cloud_id)
+            else:
+                twin_q = db.query(Banquet).filter(
+                    Banquet.deleted_at.is_(None),
+                    Banquet.event_date == event_date,
+                    Banquet.guest_name == guest_name,
+                )
+                if event_time:
+                    twin_q = twin_q.filter(Banquet.event_time == event_time)
+                twin = twin_q.first()
+                if twin and twin.cloud_id and twin.cloud_id != cloud_id:
+                    # Already synced under another cloud_id — don't insert a clone.
+                    continue
         if local is None and row.get("deleted_at"):
             continue
         if local and not _remote_is_newer(local.updated_at, row.get("updated_at")):
@@ -529,6 +602,29 @@ def _pull_takeaways(db: Session) -> int:
         if not order_date or not guest_name:
             continue
         local = db.query(TakeawayOrder).filter(TakeawayOrder.cloud_id == cloud_id).first()
+        if local is None:
+            q = db.query(TakeawayOrder).filter(
+                TakeawayOrder.cloud_id.is_(None),
+                TakeawayOrder.order_date == order_date,
+                TakeawayOrder.guest_name == guest_name,
+            )
+            order_time = row.get("order_time")
+            if order_time:
+                q = q.filter(TakeawayOrder.order_time == order_time)
+            local = q.first()
+            if local:
+                _adopt_cloud_id(local, cloud_id)
+            else:
+                twin_q = db.query(TakeawayOrder).filter(
+                    TakeawayOrder.deleted_at.is_(None),
+                    TakeawayOrder.order_date == order_date,
+                    TakeawayOrder.guest_name == guest_name,
+                )
+                if order_time:
+                    twin_q = twin_q.filter(TakeawayOrder.order_time == order_time)
+                twin = twin_q.first()
+                if twin and twin.cloud_id and twin.cloud_id != cloud_id:
+                    continue
         if local is None and row.get("deleted_at"):
             continue
         if local and not _remote_is_newer(local.updated_at, row.get("updated_at")):
@@ -560,6 +656,20 @@ def _pull_clients(db: Session) -> int:
         if not cloud_id or not full_name:
             continue
         local = db.query(Client).filter(Client.cloud_id == cloud_id).first()
+        if local is None:
+            phone = (row.get("phone") or "").strip() or None
+            iin = (row.get("iin") or "").strip() or None
+            unbound = db.query(Client).filter(Client.cloud_id.is_(None))
+            if phone:
+                local = unbound.filter(Client.phone == phone).first()
+            if local is None and iin:
+                local = unbound.filter(Client.iin == iin).first()
+            if local is None:
+                candidates = unbound.filter(Client.full_name == full_name).all()
+                if len(candidates) == 1:
+                    local = candidates[0]
+            if local:
+                _adopt_cloud_id(local, cloud_id)
         if local is None and row.get("deleted_at"):
             continue
         if local and not _remote_is_newer(local.updated_at, row.get("updated_at")):
@@ -638,6 +748,12 @@ def _pull_stays(db: Session) -> int:
             client = db.query(Client).filter(Client.cloud_id == str(client_cloud)).first()
         if client is None:
             name = (row.get("client_name") or "").strip() or "Гость"
+            unbound = db.query(Client).filter(Client.cloud_id.is_(None), Client.full_name == name)
+            client = unbound.first()
+            if client and client_cloud:
+                _adopt_cloud_id(client, str(client_cloud))
+        if client is None:
+            name = (row.get("client_name") or "").strip() or "Гость"
             client = Client(full_name=name, cloud_id=str(client_cloud) if client_cloud else None)
             if not client.cloud_id:
                 ensure_cloud_id(client)
@@ -652,6 +768,8 @@ def _pull_stays(db: Session) -> int:
             number = str(row.get("room_number") or "").strip()
             if number:
                 room = db.query(Room).filter(Room.number == number).first()
+                if room and room_cloud:
+                    _adopt_cloud_id(room, str(room_cloud))
         if room is None:
             # Cloud stay without a matched room — create a placeholder so pull
             # does not skip the whole journal after a wiped local DB.
@@ -668,6 +786,20 @@ def _pull_stays(db: Session) -> int:
                 db.add(room)
                 db.flush()
 
+        if local is None:
+            check_in = _parse_date(row.get("check_in"))
+            stay_type_raw = (row.get("stay_type") or "booking").strip().lower()
+            q = db.query(Stay).filter(
+                Stay.cloud_id.is_(None),
+                Stay.record_date == record_date,
+                Stay.room_id == room.id,
+                Stay.client_id == client.id,
+            )
+            if check_in:
+                q = q.filter(Stay.check_in == check_in)
+            local = q.first()
+            if local:
+                _adopt_cloud_id(local, cloud_id)
         if local is None:
             stay_type_raw = (row.get("stay_type") or "booking").strip().lower()
             try:
@@ -722,6 +854,20 @@ def _pull_guest_services(db: Session) -> int:
         if not cloud_id or not service_date or not guest_name:
             continue
         local = db.query(GuestService).filter(GuestService.cloud_id == cloud_id).first()
+        if local is None:
+            service_type = row.get("service_type") or "laundry_hotel"
+            q = db.query(GuestService).filter(
+                GuestService.cloud_id.is_(None),
+                GuestService.service_date == service_date,
+                GuestService.guest_name == guest_name,
+                GuestService.service_type == service_type,
+            )
+            room_number = row.get("room_number")
+            if room_number:
+                q = q.filter(GuestService.room_number == room_number)
+            local = q.first()
+            if local:
+                _adopt_cloud_id(local, cloud_id)
         if local is None and row.get("deleted_at"):
             continue
         if local and not _remote_is_newer(local.updated_at, row.get("updated_at")):
@@ -777,6 +923,22 @@ def _pull_spa(db: Session) -> int:
             .filter(SpaBookingLocal.cloud_id == cloud_id)
             .first()
         )
+        if local is None:
+            slot_time = str(row.get("slot_time") or "16:00")
+            service = str(row.get("service") or "sauna")
+            local = (
+                db.query(SpaBookingLocal)
+                .filter(
+                    SpaBookingLocal.cloud_id.is_(None),
+                    SpaBookingLocal.booking_date == booking_date,
+                    SpaBookingLocal.slot_time == slot_time,
+                    SpaBookingLocal.service == service,
+                    SpaBookingLocal.guest_name == guest_name,
+                )
+                .first()
+            )
+            if local:
+                _adopt_cloud_id(local, cloud_id)
         if local is None and row.get("deleted_at"):
             continue
         if local and not _remote_is_newer(local.updated_at, row.get("updated_at")):
@@ -824,6 +986,24 @@ def _pull_requests(db: Session) -> int:
             .filter(GuestRequestLocal.cloud_id == cloud_id)
             .first()
         )
+        if local is None:
+            req_type = str(row.get("type") or "other")
+            title = row.get("title")
+            room = row.get("room")
+            guest_name = row.get("guest_name")
+            q = db.query(GuestRequestLocal).filter(
+                GuestRequestLocal.cloud_id.is_(None),
+                GuestRequestLocal.type == req_type,
+            )
+            if title:
+                q = q.filter(GuestRequestLocal.title == title)
+            if room:
+                q = q.filter(GuestRequestLocal.room == room)
+            if guest_name:
+                q = q.filter(GuestRequestLocal.guest_name == guest_name)
+            local = q.first()
+            if local:
+                _adopt_cloud_id(local, cloud_id)
         if local is None and row.get("deleted_at"):
             continue
         if local and not _remote_is_newer(local.updated_at, row.get("updated_at")):
@@ -850,6 +1030,144 @@ def _pull_requests(db: Session) -> int:
         local.created_by_name = row.get("created_by_name")
         local.updated_by_name = row.get("updated_by_name")
         local.confirmed_by_name = row.get("confirmed_by_name")
+        touched += 1
+    return touched
+
+
+def _pull_employees(db: Session) -> int:
+    touched = 0
+    for row in _fetch_all("crm_employees"):
+        cloud_id = str(row.get("id") or "")
+        full_name = (row.get("full_name") or "").strip()
+        if not cloud_id or not full_name:
+            continue
+        local = db.query(Employee).filter(Employee.cloud_id == cloud_id).first()
+        if local is None:
+            # Match unsynced local employee by name (same staff on two PCs).
+            candidates = (
+                db.query(Employee)
+                .filter(Employee.cloud_id.is_(None), Employee.deleted_at.is_(None))
+                .all()
+            )
+            name_key = _norm_name(full_name)
+            matches = [e for e in candidates if _norm_name(e.full_name) == name_key]
+            if len(matches) == 1:
+                local = matches[0]
+                _adopt_cloud_id(local, cloud_id)
+            elif not matches:
+                # Already synced under another id — don't clone the same person.
+                existing = (
+                    db.query(Employee)
+                    .filter(Employee.deleted_at.is_(None))
+                    .all()
+                )
+                named = [e for e in existing if _norm_name(e.full_name) == name_key]
+                if named and any(e.cloud_id and e.cloud_id != cloud_id for e in named):
+                    continue
+        if local is None and row.get("deleted_at"):
+            continue
+        if local and not _remote_is_newer(local.updated_at, row.get("updated_at")):
+            continue
+        if local is None:
+            local = Employee(cloud_id=cloud_id, full_name=full_name)
+            db.add(local)
+        local.full_name = full_name
+        local.position = (row.get("position") or "официант").strip() or "официант"
+        if row.get("hourly_rate") is not None:
+            local.hourly_rate = Decimal(str(row.get("hourly_rate")))
+        local.deleted_at = _parse_datetime(row.get("deleted_at"))
+        touched += 1
+    return touched
+
+
+def _pull_timesheet_shifts(db: Session) -> int:
+    touched = 0
+    for row in _fetch_all("crm_timesheet_shifts"):
+        cloud_id = str(row.get("id") or "")
+        work_date = _parse_date(row.get("work_date"))
+        start_time = (row.get("start_time") or "").strip()
+        end_time = (row.get("end_time") or "").strip()
+        workplace = (row.get("workplace") or "").strip()
+        if not cloud_id or not work_date or not start_time or not end_time or not workplace:
+            continue
+        local = (
+            db.query(TimesheetShift)
+            .filter(TimesheetShift.cloud_id == cloud_id)
+            .first()
+        )
+        if local is None and row.get("deleted_at"):
+            continue
+        if local and not _remote_is_newer(local.updated_at, row.get("updated_at")):
+            continue
+
+        employee = None
+        employee_cloud = row.get("employee_cloud_id")
+        if employee_cloud:
+            employee = (
+                db.query(Employee)
+                .filter(Employee.cloud_id == str(employee_cloud))
+                .first()
+            )
+        if employee is None:
+            name = (row.get("employee_name") or "").strip() or "Сотрудник"
+            name_key = _norm_name(name)
+            candidates = (
+                db.query(Employee)
+                .filter(Employee.deleted_at.is_(None))
+                .all()
+            )
+            matches = [e for e in candidates if _norm_name(e.full_name) == name_key]
+            if employee_cloud:
+                unbound = [e for e in matches if not e.cloud_id]
+                if len(unbound) == 1:
+                    employee = unbound[0]
+                    _adopt_cloud_id(employee, str(employee_cloud))
+                elif len(matches) == 1 and not matches[0].cloud_id:
+                    employee = matches[0]
+                    _adopt_cloud_id(employee, str(employee_cloud))
+            elif len(matches) == 1:
+                employee = matches[0]
+        if employee is None:
+            name = (row.get("employee_name") or "").strip() or "Сотрудник"
+            employee = Employee(
+                full_name=name,
+                cloud_id=str(employee_cloud) if employee_cloud else None,
+            )
+            if not employee.cloud_id:
+                ensure_cloud_id(employee)
+            db.add(employee)
+            db.flush()
+
+        if local is None:
+            local = (
+                db.query(TimesheetShift)
+                .filter(
+                    TimesheetShift.cloud_id.is_(None),
+                    TimesheetShift.employee_id == employee.id,
+                    TimesheetShift.work_date == work_date,
+                    TimesheetShift.start_time == start_time,
+                    TimesheetShift.end_time == end_time,
+                    TimesheetShift.workplace == workplace,
+                )
+                .first()
+            )
+            if local:
+                _adopt_cloud_id(local, cloud_id)
+        if local is None:
+            local = TimesheetShift(cloud_id=cloud_id, employee_id=employee.id)
+            db.add(local)
+        local.employee_id = employee.id
+        local.work_date = work_date
+        local.start_time = start_time
+        local.end_time = end_time
+        local.workplace = workplace
+        if row.get("hourly_rate") is not None:
+            local.hourly_rate = Decimal(str(row.get("hourly_rate")))
+        elif employee.hourly_rate is not None:
+            local.hourly_rate = employee.hourly_rate
+        else:
+            local.hourly_rate = Decimal("750")
+        local.deleted_at = _parse_datetime(row.get("deleted_at"))
         touched += 1
     return touched
 
@@ -888,6 +1206,16 @@ def _seed_outbox_for_unsynced(db: Session) -> None:
         )
     seed_rows(db.query(SpaBookingLocal).all(), "spa_bookings", _spa_payload)
     seed_rows(db.query(GuestRequestLocal).all(), "guest_requests", _request_payload)
+    seed_rows(db.query(Employee).all(), "employees", _employee_payload)
+    for shift in (
+        db.query(TimesheetShift).options(joinedload(TimesheetShift.employee)).all()
+    ):
+        if shift.cloud_id:
+            continue
+        if shift.employee:
+            ensure_cloud_id(shift.employee)
+        cid = ensure_cloud_id(shift)
+        enqueue_outbox(db, "timesheet_shifts", cid, "upsert", _timesheet_shift_payload(shift))
 
 
 def _rebuild_payload(db: Session, entity_type: str, cloud_id: str) -> Optional[dict[str, Any]]:
@@ -924,6 +1252,17 @@ def _rebuild_payload(db: Session, entity_type: str, cloud_id: str) -> Optional[d
             .first()
         )
         return _request_payload(row) if row else None
+    if entity_type == "employees":
+        row = db.query(Employee).filter(Employee.cloud_id == cloud_id).first()
+        return _employee_payload(row) if row else None
+    if entity_type == "timesheet_shifts":
+        row = (
+            db.query(TimesheetShift)
+            .options(joinedload(TimesheetShift.employee))
+            .filter(TimesheetShift.cloud_id == cloud_id)
+            .first()
+        )
+        return _timesheet_shift_payload(row) if row else None
     return None
 
 
@@ -976,6 +1315,8 @@ def purge_old_trash(db: Session) -> int:
         Client,
         Stay,
         GuestService,
+        Employee,
+        TimesheetShift,
         SpaBookingLocal,
         GuestRequestLocal,
     ):
@@ -1022,20 +1363,15 @@ def run_full_sync(db: Session, *, seed_all: bool = True) -> dict[str, Any]:
             return get_sync_status()
 
         try:
-            if seed_all:
-                try:
-                    _seed_outbox_for_unsynced(db)
-                    db.commit()
-                except Exception as exc:
-                    logger.warning("Outbox seed failed: %s", exc, exc_info=True)
-                    db.rollback()
-
-            # Pull each entity independently — one failure must not wipe spa/requests.
+            # Pull first so local rows adopt cloud_id by natural key,
+            # then seed only truly local-only rows (avoids duplicate cloud inserts).
             pull_steps = (
                 ("clients", _pull_clients),
                 ("rooms", _pull_rooms),
                 ("stays", _pull_stays),
                 ("guest_services", _pull_guest_services),
+                ("employees", _pull_employees),
+                ("timesheet_shifts", _pull_timesheet_shifts),
                 ("banquets", _pull_banquets),
                 ("takeaways", _pull_takeaways),
                 ("spa_bookings", _pull_spa),
@@ -1048,6 +1384,14 @@ def run_full_sync(db: Session, *, seed_all: bool = True) -> dict[str, Any]:
                     logger.info("Sync pull %s: %s row(s)", name, touched)
                 except Exception as exc:
                     logger.warning("Sync pull %s failed: %s", name, exc, exc_info=True)
+                    db.rollback()
+
+            if seed_all:
+                try:
+                    _seed_outbox_for_unsynced(db)
+                    db.commit()
+                except Exception as exc:
+                    logger.warning("Outbox seed failed: %s", exc, exc_info=True)
                     db.rollback()
 
             flushed = 0
@@ -1185,6 +1529,10 @@ def queue_entity_sync(entity_type: str, entity: Any, *, soft_delete: bool = Fals
                         payload = _room_payload(entity)
                     elif entity_type == "guest_services":
                         payload = _guest_service_payload(entity, db)
+                    elif entity_type == "employees":
+                        payload = _employee_payload(entity)
+                    elif entity_type == "timesheet_shifts":
+                        payload = _timesheet_shift_payload(entity)
             enqueue_outbox(db, entity_type, entity.cloud_id, op, payload)
             db.commit()
         finally:

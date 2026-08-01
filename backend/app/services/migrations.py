@@ -67,6 +67,15 @@ GUEST_SERVICE_COLUMNS = {
     "cloud_id": "VARCHAR(64)",
 }
 
+EMPLOYEE_COLUMNS = {
+    "cloud_id": "VARCHAR(64)",
+}
+
+TIMESHEET_SHIFT_COLUMNS = {
+    "cloud_id": "VARCHAR(64)",
+    "deleted_at": "DATETIME",
+}
+
 USER_COLUMNS = {
     "full_name": "VARCHAR(255) DEFAULT ''",
     "role": "VARCHAR(32) DEFAULT 'admin'",
@@ -226,6 +235,12 @@ def run_migrations() -> None:
         for column, col_type in GUEST_SERVICE_COLUMNS.items():
             _add_column_if_missing(conn, "guest_services", column, col_type)
 
+        for column, col_type in EMPLOYEE_COLUMNS.items():
+            _add_column_if_missing(conn, "employees", column, col_type)
+
+        for column, col_type in TIMESHEET_SHIFT_COLUMNS.items():
+            _add_column_if_missing(conn, "timesheet_shifts", column, col_type)
+
         for column, col_type in USER_COLUMNS.items():
             _add_column_if_missing(conn, "users", column, col_type)
 
@@ -239,6 +254,8 @@ def run_migrations() -> None:
             "rooms",
             "stays",
             "guest_services",
+            "employees",
+            "timesheet_shifts",
             "spa_bookings_local",
             "guest_requests_local",
         ):

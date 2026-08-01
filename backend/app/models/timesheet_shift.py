@@ -17,6 +17,12 @@ class TimesheetShift(Base):
     end_time: Mapped[str] = mapped_column(String(5), nullable=False)
     workplace: Mapped[str] = mapped_column(String(16), nullable=False)
     hourly_rate: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    cloud_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

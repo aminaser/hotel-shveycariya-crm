@@ -14,6 +14,9 @@ class Employee(Base):
     full_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     position: Mapped[str] = mapped_column(String(64), default="официант", nullable=False)
     hourly_rate: Mapped[float] = mapped_column(Numeric(10, 2), default=750, nullable=False)
+    cloud_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
     deleted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

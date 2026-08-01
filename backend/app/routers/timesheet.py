@@ -25,12 +25,17 @@ from app.schemas.timesheet import (
 )
 from app.services.timesheet_calc import shift_earnings, shift_hours
 from app.services.room_service import today_local
+from app.services.supabase_crm_sync import ensure_cloud_id, queue_entity_sync
 
 router = APIRouter(tags=["timesheet"])
 
 
 def _active_employees(db: Session):
     return db.query(Employee).filter(Employee.deleted_at.is_(None))
+
+
+def _active_shifts(db: Session):
+    return db.query(TimesheetShift).filter(TimesheetShift.deleted_at.is_(None))
 
 
 def _shift_response(shift: TimesheetShift) -> ShiftResponse:
@@ -69,8 +74,10 @@ def create_employee(
 ) -> Employee:
     employee = Employee(**payload.model_dump())
     db.add(employee)
+    ensure_cloud_id(employee)
     db.commit()
     db.refresh(employee)
+    queue_entity_sync("employees", employee)
     return employee
 
 
@@ -86,8 +93,10 @@ def update_employee(
         raise HTTPException(status_code=404, detail="Сотрудник не найден")
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(employee, key, value)
+    ensure_cloud_id(employee)
     db.commit()
     db.refresh(employee)
+    queue_entity_sync("employees", employee)
     return employee
 
 
@@ -101,7 +110,9 @@ def delete_employee(
     if not employee:
         raise HTTPException(status_code=404, detail="Сотрудник не найден")
     employee.deleted_at = datetime.now(timezone.utc)
+    ensure_cloud_id(employee)
     db.commit()
+    queue_entity_sync("employees", employee, soft_delete=True)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 @router.get("/timesheet", response_model=TimesheetDaySummary)
@@ -113,7 +124,11 @@ def get_timesheet_day(
     shifts = (
         db.query(TimesheetShift)
         .join(Employee)
-        .filter(TimesheetShift.work_date == work_date, Employee.deleted_at.is_(None))
+        .filter(
+            TimesheetShift.work_date == work_date,
+            TimesheetShift.deleted_at.is_(None),
+            Employee.deleted_at.is_(None),
+        )
         .order_by(TimesheetShift.start_time.asc(), Employee.full_name.asc())
         .all()
     )
@@ -146,6 +161,7 @@ def get_timesheet_week(
         .filter(
             TimesheetShift.work_date >= date_from,
             TimesheetShift.work_date <= date_to,
+            TimesheetShift.deleted_at.is_(None),
             Employee.deleted_at.is_(None),
         )
         .order_by(
@@ -214,8 +230,12 @@ def create_shift(
         hourly_rate=hourly_rate,
     )
     db.add(shift)
+    ensure_cloud_id(employee)
+    ensure_cloud_id(shift)
     db.commit()
     db.refresh(shift)
+    queue_entity_sync("employees", employee)
+    queue_entity_sync("timesheet_shifts", shift)
     return _shift_response(shift)
 
 
@@ -226,7 +246,7 @@ def update_shift(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> ShiftResponse:
-    shift = db.query(TimesheetShift).filter(TimesheetShift.id == shift_id).first()
+    shift = _active_shifts(db).filter(TimesheetShift.id == shift_id).first()
     if not shift:
         raise HTTPException(status_code=404, detail="Смена не найдена")
 
@@ -244,8 +264,10 @@ def update_shift(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    ensure_cloud_id(shift)
     db.commit()
     db.refresh(shift)
+    queue_entity_sync("timesheet_shifts", shift)
     return _shift_response(shift)
 
 
@@ -255,9 +277,11 @@ def delete_shift(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> Response:
-    shift = db.query(TimesheetShift).filter(TimesheetShift.id == shift_id).first()
+    shift = _active_shifts(db).filter(TimesheetShift.id == shift_id).first()
     if not shift:
         raise HTTPException(status_code=404, detail="Смена не найдена")
-    db.delete(shift)
+    shift.deleted_at = datetime.now(timezone.utc)
+    ensure_cloud_id(shift)
     db.commit()
+    queue_entity_sync("timesheet_shifts", shift, soft_delete=True)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
