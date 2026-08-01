@@ -348,6 +348,7 @@ def _stay_payload(stay: Stay) -> dict[str, Any]:
         "payment_method": stay.payment_method,
         "payment_date": stay.payment_date,
         "group_id": stay.group_id,
+        "extra_bedding": bool(getattr(stay, "extra_bedding", False)),
         "notes": stay.notes,
         "checked_in_at": stay.checked_in_at,
         "deleted_at": stay.deleted_at,
@@ -908,6 +909,7 @@ def _pull_stays(db: Session) -> int:
         local.payment_method = row.get("payment_method")
         local.payment_date = _parse_date(row.get("payment_date"))
         local.group_id = row.get("group_id")
+        local.extra_bedding = bool(row.get("extra_bedding"))
         local.notes = row.get("notes")
         local.checked_in_at = _parse_datetime(row.get("checked_in_at"))
         local.deleted_at = _parse_datetime(row.get("deleted_at"))

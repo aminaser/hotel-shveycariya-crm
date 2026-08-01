@@ -3,7 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -50,6 +50,8 @@ class Stay(Base):
     payment_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
     # Shared id when several rooms were booked together in one journal submit.
     group_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    # Extra bedding service (+2000 ₸) added to room total when selected.
+    extra_bedding: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     cloud_id: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, unique=True, index=True

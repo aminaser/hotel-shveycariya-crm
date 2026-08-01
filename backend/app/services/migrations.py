@@ -61,6 +61,7 @@ STAY_COLUMNS = {
     "group_id": "VARCHAR(36)",
     "checked_in_at": "DATETIME",
     "cloud_id": "VARCHAR(64)",
+    "extra_bedding": "BOOLEAN DEFAULT 0",
 }
 
 GUEST_SERVICE_COLUMNS = {

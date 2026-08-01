@@ -60,6 +60,7 @@ export interface Stay {
   payment_method: string | null;
   payment_date: string | null;
   group_id: string | null;
+  extra_bedding: boolean;
   notes: string | null;
   checked_in_at: string | null;
   in_room: boolean;

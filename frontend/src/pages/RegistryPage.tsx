@@ -39,8 +39,10 @@ import { groupStays, newGroupId, pickPaymentPrimaryStay, pickPaymentWriteTarget,
 import {
   copyToClipboard,
   csvEscape,
+  EXTRA_BEDDING_FEE,
   formatDate,
   formatMoney,
+  formatStayPaymentAmount,
   paymentStatusLabel,
   roomStatusLabel,
   stayTypeLabel,
@@ -75,6 +77,7 @@ const emptyForm = () => ({
   payment_date: "",
   phone: "",
   iin: "",
+  extra_bedding: false,
   notes: "",
 });
 
@@ -213,6 +216,7 @@ export function RegistryPage() {
       payment_date: payPrimary.payment_date ?? stay.payment_date ?? "",
       phone: stay.client_phone ?? "",
       iin: stay.client_iin ?? "",
+      extra_bedding: members.some((s) => Boolean(s.extra_bedding)),
       notes: stay.notes ?? "",
     });
     setDialogOpen(true);
@@ -323,16 +327,44 @@ export function RegistryPage() {
     checkOut: string,
   ) => {
     if (next.stay_type === "alumni") {
+      const people = parseInt(next.people_count, 10) || 1;
+      const base = parseFloat(alumniAmount(people)) || 0;
+      const bedding =
+        next.extra_bedding ? EXTRA_BEDDING_FEE * Math.max(1, roomIds.length || 1) : 0;
       return {
         ...next,
-        payment_amount: alumniAmount(parseInt(next.people_count, 10) || 1),
+        payment_amount: String(Math.round(base + bedding)),
       };
     }
     if (roomIds.length === 0) return { ...next, payment_amount: "" };
+    const base = parseFloat(totalAmountForRooms(roomIds, checkIn, checkOut)) || 0;
+    const bedding = next.extra_bedding
+      ? EXTRA_BEDDING_FEE * roomIds.length
+      : 0;
     return {
       ...next,
-      payment_amount: totalAmountForRooms(roomIds, checkIn, checkOut),
+      payment_amount: base > 0 || bedding > 0 ? String(Math.round(base + bedding)) : "",
     };
+  };
+
+  const setExtraBedding = (extra_bedding: boolean) => {
+    const rooms = Math.max(1, form.room_ids.length || 1);
+    const delta = EXTRA_BEDDING_FEE * rooms;
+    const current = parseFloat(form.payment_amount) || 0;
+    if (extra_bedding === form.extra_bedding) return;
+    if (extra_bedding) {
+      setForm({
+        ...form,
+        extra_bedding: true,
+        payment_amount: String(Math.round(current + delta)),
+      });
+      return;
+    }
+    setForm({
+      ...form,
+      extra_bedding: false,
+      payment_amount: String(Math.max(0, Math.round(current - delta))),
+    });
   };
 
   const setStayType = (stay_type: StayType) => {
@@ -340,9 +372,14 @@ export function RegistryPage() {
       stay_type === "alumni" ? form.people_count || "1" : form.people_count;
     const next = { ...form, stay_type, people_count };
     if (stay_type === "alumni") {
+      const people = parseInt(people_count, 10) || 1;
+      const base = parseFloat(alumniAmount(people)) || 0;
+      const bedding = form.extra_bedding
+        ? EXTRA_BEDDING_FEE * Math.max(1, form.room_ids.length || 1)
+        : 0;
       setForm({
         ...next,
-        payment_amount: alumniAmount(parseInt(people_count, 10) || 1),
+        payment_amount: String(Math.round(base + bedding)),
       });
       return;
     }
@@ -357,7 +394,11 @@ export function RegistryPage() {
     const next = { ...form, people_count };
     if (form.stay_type === "alumni") {
       const n = parseInt(people_count, 10) || 1;
-      setForm({ ...next, payment_amount: alumniAmount(n) });
+      const base = parseFloat(alumniAmount(n)) || 0;
+      const bedding = form.extra_bedding
+        ? EXTRA_BEDDING_FEE * Math.max(1, form.room_ids.length || 1)
+        : 0;
+      setForm({ ...next, payment_amount: String(Math.round(base + bedding)) });
       return;
     }
     setForm(next);
@@ -428,6 +469,7 @@ export function RegistryPage() {
         ? null
         : form.payment_date || todayLocal(),
     group_id: groupId,
+    extra_bedding: Boolean(form.extra_bedding),
     notes: form.notes || null,
   });
 
@@ -528,14 +570,22 @@ export function RegistryPage() {
             ? form.prepayment || "0"
             : "0";
         if (packageTotal != null) {
-          if (isPrimary) amount = packageTotal;
-          else {
+          if (isPrimary) {
+            const bedding = form.extra_bedding
+              ? EXTRA_BEDDING_FEE * roomIds.length
+              : 0;
+            amount = String(Math.round((parseFloat(packageTotal) || 0) + bedding));
+          } else {
             amount = "0";
             paymentStatus = "unpaid";
             prepayment = "0";
           }
         } else if (multi) {
-          amount = amountForRoom(roomIdStr, form.check_in, form.planned_check_out) || "0";
+          const base = parseFloat(
+            amountForRoom(roomIdStr, form.check_in, form.planned_check_out) || "0",
+          ) || 0;
+          const bedding = form.extra_bedding ? EXTRA_BEDDING_FEE : 0;
+          amount = String(Math.round(base + bedding));
           if (!isPrimary && form.payment_status === "partial") {
             paymentStatus = "unpaid";
             prepayment = "0";
@@ -628,6 +678,7 @@ export function RegistryPage() {
           snap.payment_method_custom,
         ),
         notes: snap.notes || null,
+        extra_bedding: Boolean(snap.extra_bedding),
         ...(groupId ? { group_id: groupId } : {}),
       };
 
@@ -652,10 +703,30 @@ export function RegistryPage() {
             : existing.payment_amount;
 
         if (snap.stay_type === "alumni") {
-          paymentAmount = isPrimary ? alumniAmount(people) : "0";
-          if (!isPrimary) paymentStatus = "unpaid";
-        } else if (multi && snap.payment_status === "partial" && !isPrimary) {
-          paymentStatus = "unpaid";
+          if (isPrimary) {
+            const bedding = snap.extra_bedding
+              ? EXTRA_BEDDING_FEE * selected.length
+              : 0;
+            paymentAmount = String(
+              Math.round((parseFloat(alumniAmount(people)) || 0) + bedding),
+            );
+          } else {
+            paymentAmount = "0";
+            paymentStatus = "unpaid";
+          }
+        } else if (multi) {
+          const base =
+            parseFloat(
+              amountForRoom(String(existing.room_id), snap.check_in, snap.planned_check_out) ||
+                "0",
+            ) || 0;
+          const bedding = snap.extra_bedding ? EXTRA_BEDDING_FEE : 0;
+          paymentAmount = String(Math.round(base + bedding));
+          if (snap.payment_status === "partial" && !isPrimary) {
+            paymentStatus = "unpaid";
+          }
+        } else if (selected.length === 1) {
+          paymentAmount = snap.payment_amount || existing.payment_amount;
         }
 
         if (snap.payment_status === "partial" && isPrimary) {
@@ -695,8 +766,13 @@ export function RegistryPage() {
         const amount =
           snap.stay_type === "alumni"
             ? "0"
-            : amountForRoom(roomIdStr, snap.check_in, snap.planned_check_out) ||
-              "0";
+            : String(
+                Math.round(
+                  (parseFloat(
+                    amountForRoom(roomIdStr, snap.check_in, snap.planned_check_out) || "0",
+                  ) || 0) + (snap.extra_bedding ? EXTRA_BEDDING_FEE : 0),
+                ),
+              );
         await apiFetch("/stays", {
           method: "POST",
           body: JSON.stringify({
@@ -1196,7 +1272,13 @@ export function RegistryPage() {
                       : ""}
                   </td>
                   <td className="px-4 py-3">
-                    <div>{formatMoney(group.totalAmount)}</div>
+                    <div>
+                      {formatStayPaymentAmount(
+                        group.totalAmount,
+                        group.stays.some((s) => Boolean(s.extra_bedding)),
+                        group.stays.filter((s) => Boolean(s.extra_bedding)).length || 1,
+                      )}
+                    </div>
                     <div className="text-xs text-muted-foreground">
                       {paymentStatusLabel[group.paymentStatus]}
                     </div>
@@ -1640,6 +1722,29 @@ export function RegistryPage() {
               onPresetChange={(v) => setForm({ ...form, payment_method_preset: v })}
               onCustomTextChange={(v) => setForm({ ...form, payment_method_custom: v })}
             />
+            <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/20 px-3 py-2.5">
+              <input
+                id="extra-bedding"
+                type="checkbox"
+                className="mt-1"
+                checked={form.extra_bedding}
+                onChange={(e) => setExtraBedding(e.target.checked)}
+              />
+              <div className="min-w-0">
+                <Label htmlFor="extra-bedding" className="cursor-pointer">
+                  Услуга: доп постель — {EXTRA_BEDDING_FEE.toLocaleString("ru-KZ")} ₸
+                </Label>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {form.extra_bedding
+                    ? formatStayPaymentAmount(
+                        form.payment_amount || "0",
+                        true,
+                        Math.max(1, form.room_ids.length || 1),
+                      )
+                    : "При выборе сумма начисляется к общей сумме номера"}
+                </p>
+              </div>
+            </div>
             <div className="space-y-2">
               <Label>Заметки</Label>
               <Input

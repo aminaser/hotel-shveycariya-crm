@@ -53,6 +53,7 @@ class StayBase(BaseModel):
     payment_method: str | None = Field(default=None, max_length=64)
     payment_date: date | None = None
     group_id: str | None = Field(default=None, max_length=36)
+    extra_bedding: bool = False
     notes: str | None = None
 
 
@@ -75,6 +76,7 @@ class StayUpdate(BaseModel):
     payment_method: str | None = Field(default=None, max_length=64)
     payment_date: date | None = None
     group_id: str | None = Field(default=None, max_length=36)
+    extra_bedding: bool | None = None
     notes: str | None = None
 
 
@@ -98,6 +100,7 @@ class StayResponse(BaseModel):
     payment_method: str | None
     payment_date: date | None = None
     group_id: str | None = None
+    extra_bedding: bool = False
     notes: str | None
     checked_in_at: datetime | None = None
     created_at: datetime

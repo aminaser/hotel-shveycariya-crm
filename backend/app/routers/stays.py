@@ -60,6 +60,7 @@ def _stay_to_response(stay: Stay) -> StayResponse:
         payment_date=stay.payment_date,
         people_count=getattr(stay, "people_count", None) or 1,
         group_id=getattr(stay, "group_id", None),
+        extra_bedding=bool(getattr(stay, "extra_bedding", False)),
         notes=stay.notes,
         checked_in_at=getattr(stay, "checked_in_at", None),
         created_at=stay.created_at,

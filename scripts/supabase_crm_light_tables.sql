@@ -139,6 +139,8 @@ create index if not exists crm_stays_crm_id_idx on public.crm_stays (crm_id);
 create index if not exists crm_stays_updated_at_idx on public.crm_stays (updated_at desc);
 create index if not exists crm_stays_deleted_at_idx on public.crm_stays (deleted_at);
 
+alter table public.crm_stays add column if not exists extra_bedding boolean not null default false;
+
 -- ─── Guest services (laundry etc.) ──────────────────────────────────────────
 create table if not exists public.crm_guest_services (
   id uuid primary key default gen_random_uuid(),

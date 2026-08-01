@@ -19,6 +19,26 @@ export function formatMoney(value: number | string): string {
   }).format(amount);
 }
 
+/** Extra bedding add-on in the check-in journal (₸). */
+export const EXTRA_BEDDING_FEE = 2000;
+
+/** e.g. «10000+2000 доп постель» when bedding is selected. */
+export function formatStayPaymentAmount(
+  paymentAmount: number | string,
+  extraBedding: boolean,
+  beddingCount: number = 1,
+): string {
+  const total = Math.round(
+    typeof paymentAmount === "string" ? parseFloat(paymentAmount) || 0 : paymentAmount || 0,
+  );
+  const count = Math.max(1, Math.floor(beddingCount) || 1);
+  if (!extraBedding) return formatMoney(total);
+  const bedding = EXTRA_BEDDING_FEE * count;
+  const base = Math.max(0, total - bedding);
+  if (count === 1) return `${base}+${EXTRA_BEDDING_FEE} доп постель`;
+  return `${base}+${bedding} доп постель`;
+}
+
 export const stayTypeLabel: Record<string, string> = {
   booking: "Бронь",
   extension: "Продление",
