@@ -250,7 +250,7 @@ export function AnalyticsPage() {
           { label: "На вынос", value: formatMoney(summary.takeaway_revenue) },
           { label: "Сауна / баня", value: formatMoney(summary.spa_revenue) },
           { label: "Средняя / день", value: formatMoney(summary.avg_daily_revenue) },
-          { label: "Зарплата официантов", value: formatMoney(summary.total_salary_expense) },
+          { label: "Зарплата по табелю", value: formatMoney(summary.total_salary_expense) },
           { label: "Долг", value: formatMoney(summary.unpaid_amount) },
         ].map((item) => (
           <Card key={item.label}>

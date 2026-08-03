@@ -47,7 +47,7 @@ def list_clients(
         )
     if author_id is not None:
         query = query.filter(Client.created_by_user_id == author_id)
-    return query.order_by(Client.full_name.asc()).all()
+    return query.order_by(Client.created_at.desc(), Client.id.desc()).all()
 
 
 @router.post("/dedupe")

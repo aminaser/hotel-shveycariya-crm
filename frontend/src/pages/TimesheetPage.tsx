@@ -54,23 +54,49 @@ const WORKPLACE_LABEL: Record<Workplace, string> = {
   letnik: "Летник",
   bar: "Бар",
   banquet: "Банкет",
+  none: "",
 };
 
 const WORKPLACE_STYLE: Record<Workplace, string> = {
   letnik: "border-emerald-200 bg-emerald-50 text-emerald-900",
   bar: "border-sky-200 bg-sky-50 text-sky-900",
   banquet: "border-amber-200 bg-amber-50 text-amber-950",
+  none: "border-slate-200 bg-slate-50 text-slate-900",
 };
 
+const WAITER_WORKPLACES: Workplace[] = ["letnik", "bar", "banquet"];
+
+const POSITION_OPTIONS = [
+  "администратор",
+  "бармен",
+  "кассир",
+  "продавец",
+  "повар",
+  "салатница",
+  "техничка",
+  "охранник",
+  "официант",
+] as const;
+
+/** Full day, every 15 minutes: 00:00 … 23:45 */
 const TIME_OPTIONS = (() => {
   const options: string[] = [];
-  for (let h = 6; h <= 23; h += 1) {
-    for (const m of [0, 30]) {
+  for (let h = 0; h <= 23; h += 1) {
+    for (const m of [0, 15, 30, 45]) {
       options.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
     }
   }
   return options;
 })();
+
+function isWaiterPosition(position: string | null | undefined): boolean {
+  return (position ?? "").trim().toLowerCase() === "официант";
+}
+
+function timeOptionsWith(extra: string): string[] {
+  if (!extra || TIME_OPTIONS.includes(extra)) return TIME_OPTIONS;
+  return [...TIME_OPTIONS, extra].sort();
+}
 
 const WEEKDAY_SHORT = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"];
 
@@ -129,6 +155,12 @@ export function TimesheetPage() {
     queryKey: ["employees"],
     queryFn: () => apiFetch<Employee[]>("/employees"),
   });
+
+  const selectedShiftEmployee = useMemo(
+    () => employees.find((e) => String(e.id) === shiftForm.employee_id) ?? null,
+    [employees, shiftForm.employee_id],
+  );
+  const shiftNeedsWorkplace = isWaiterPosition(selectedShiftEmployee?.position);
 
   const { data: monthSummary, isLoading: monthLoading } = useQuery({
     queryKey: ["timesheet-month", dateFrom, dateTo],
@@ -214,12 +246,13 @@ export function TimesheetPage() {
     mutationFn: () => {
       const employeeId = Number(shiftForm.employee_id);
       const employee = employees.find((e) => e.id === employeeId);
+      const waiter = isWaiterPosition(employee?.position);
       const body = {
         employee_id: employeeId,
         work_date: shiftForm.work_date,
         start_time: shiftForm.start_time,
         end_time: shiftForm.end_time,
-        workplace: shiftForm.workplace,
+        workplace: waiter ? shiftForm.workplace : ("none" as Workplace),
         hourly_rate: employee?.hourly_rate ?? "750",
       };
       if (editShiftId) {
@@ -288,7 +321,10 @@ export function TimesheetPage() {
       work_date: shift.work_date,
       start_time: shift.start_time,
       end_time: shift.end_time,
-      workplace: shift.workplace,
+      workplace:
+        shift.workplace === "none" || !WAITER_WORKPLACES.includes(shift.workplace)
+          ? "letnik"
+          : shift.workplace,
     });
     setShiftOpen(true);
   };
@@ -457,14 +493,23 @@ export function TimesheetPage() {
                       </button>
                     ) : (
                       <ul className="space-y-1">
-                        {dayShifts.map((shift) => (
+                        {dayShifts.map((shift) => {
+                          const showWorkplace =
+                            isWaiterPosition(shift.position) &&
+                            shift.workplace !== "none" &&
+                            Boolean(WORKPLACE_LABEL[shift.workplace]);
+                          const styleKey: Workplace =
+                            showWorkplace && shift.workplace in WORKPLACE_STYLE
+                              ? shift.workplace
+                              : "none";
+                          return (
                           <li key={shift.id}>
                             <button
                               type="button"
                               onClick={() => openEditShift(shift)}
                               className={cn(
                                 "w-full rounded-md border px-1.5 py-1 text-left transition-shadow hover:shadow-sm",
-                                WORKPLACE_STYLE[shift.workplace],
+                                WORKPLACE_STYLE[styleKey],
                               )}
                             >
                               <div className="truncate text-[11px] font-semibold leading-tight">
@@ -475,7 +520,9 @@ export function TimesheetPage() {
                               </div>
                               <div className="mt-0.5 flex items-center justify-between gap-1">
                                 <span className="truncate text-[9px] font-medium opacity-70">
-                                  {WORKPLACE_LABEL[shift.workplace]}
+                                  {showWorkplace
+                                    ? WORKPLACE_LABEL[shift.workplace]
+                                    : shift.position}
                                 </span>
                                 <span
                                   role="button"
@@ -502,7 +549,8 @@ export function TimesheetPage() {
                               </div>
                             </button>
                           </li>
-                        ))}
+                          );
+                        })}
                         <li>
                           <button
                             type="button"
@@ -603,11 +651,35 @@ export function TimesheetPage() {
             </div>
             <div>
               <Label>Должность</Label>
-              <Input
-                value={employeeForm.position}
-                onChange={(e) => setEmployeeForm((f) => ({ ...f, position: e.target.value }))}
-                placeholder="официант"
-              />
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {POSITION_OPTIONS.map((position) => {
+                  const selected = employeeForm.position === position;
+                  return (
+                    <button
+                      key={position}
+                      type="button"
+                      onClick={() => setEmployeeForm((f) => ({ ...f, position }))}
+                      className={cn(
+                        "rounded-lg border px-2.5 py-1.5 text-xs font-medium capitalize transition-colors",
+                        selected
+                          ? "border-emerald-600/40 bg-emerald-50 text-emerald-900"
+                          : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
+                      )}
+                    >
+                      {position}
+                    </button>
+                  );
+                })}
+                {employeeForm.position &&
+                  !(POSITION_OPTIONS as readonly string[]).includes(employeeForm.position) && (
+                    <button
+                      type="button"
+                      className="rounded-lg border border-emerald-600/40 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium capitalize text-emerald-900"
+                    >
+                      {employeeForm.position}
+                    </button>
+                  )}
+              </div>
             </div>
             <div>
               <Label>Ставка, ₸/час</Label>
@@ -658,7 +730,18 @@ export function TimesheetPage() {
               <Label>Сотрудник</Label>
               <Select
                 value={shiftForm.employee_id}
-                onValueChange={(value) => setShiftForm((f) => ({ ...f, employee_id: value }))}
+                onValueChange={(value) => {
+                  const employee = employees.find((e) => String(e.id) === value);
+                  setShiftForm((f) => ({
+                    ...f,
+                    employee_id: value,
+                    workplace: isWaiterPosition(employee?.position)
+                      ? f.workplace === "none"
+                        ? "letnik"
+                        : f.workplace
+                      : f.workplace,
+                  }));
+                }}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Выберите сотрудника" />
@@ -667,6 +750,7 @@ export function TimesheetPage() {
                   {employees.map((employee) => (
                     <SelectItem key={employee.id} value={String(employee.id)}>
                       {employee.full_name}
+                      {employee.position ? ` · ${employee.position}` : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -682,8 +766,8 @@ export function TimesheetPage() {
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
-                    {TIME_OPTIONS.map((time) => (
+                  <SelectContent className="max-h-72">
+                    {timeOptionsWith(shiftForm.start_time).map((time) => (
                       <SelectItem key={`start-${time}`} value={time}>
                         {time}
                       </SelectItem>
@@ -700,8 +784,8 @@ export function TimesheetPage() {
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
-                    {TIME_OPTIONS.map((time) => (
+                  <SelectContent className="max-h-72">
+                    {timeOptionsWith(shiftForm.end_time).map((time) => (
                       <SelectItem key={`end-${time}`} value={time}>
                         {time}
                       </SelectItem>
@@ -710,26 +794,31 @@ export function TimesheetPage() {
                 </Select>
               </div>
             </div>
-            <div>
-              <Label>Место работы</Label>
-              <Select
-                value={shiftForm.workplace}
-                onValueChange={(value) =>
-                  setShiftForm((f) => ({ ...f, workplace: value as Workplace }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {(Object.keys(WORKPLACE_LABEL) as Workplace[]).map((key) => (
-                    <SelectItem key={key} value={key}>
-                      {WORKPLACE_LABEL[key]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {shiftNeedsWorkplace && (
+              <div>
+                <Label>Место работы</Label>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {WAITER_WORKPLACES.map((key) => {
+                    const selected = shiftForm.workplace === key;
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setShiftForm((f) => ({ ...f, workplace: key }))}
+                        className={cn(
+                          "rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
+                          selected
+                            ? WORKPLACE_STYLE[key]
+                            : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
+                        )}
+                      >
+                        {WORKPLACE_LABEL[key]}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShiftOpen(false)}>

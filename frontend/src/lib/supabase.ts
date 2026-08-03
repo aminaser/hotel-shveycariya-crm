@@ -53,8 +53,10 @@ export interface SpaBooking {
   source: SpaBookingSource;
   request_id: string | null;
   notes: string | null;
-  /** Amount charged / received (₸). */
+  /** Full booking price (₸). */
   price: number | null;
+  /** Amount already received (₸); may be less than price when partially paid. */
+  paid_amount?: number | null;
   payment_method: string | null;
   payment_date: string | null;
   created_by_name: string | null;

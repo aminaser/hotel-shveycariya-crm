@@ -188,9 +188,7 @@ def dedupe_clients(db: Session, current_user: User | None = None) -> dict[str, i
         phone_key = normalize_phone(client.phone)
         if phone_key:
             add_key(f"phone:{phone_key}", client)
-        name_key = normalize_name(client.full_name)
-        if name_key:
-            add_key(f"name:{name_key}", client)
+        # Do not merge on bare ФИО — different guests often share a first name.
 
     # Union-find style: map each client id to the earliest keeper in overlapping groups.
     parent: dict[int, int] = {c.id: c.id for c in clients}

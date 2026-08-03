@@ -47,6 +47,7 @@ TAKEAWAY_COLUMNS = {
     "payment_method": "VARCHAR(64)",
     "payment_date": "DATE",
     "cloud_id": "VARCHAR(64)",
+    "fulfillment_status": "VARCHAR(32) DEFAULT 'waiting'",
 }
 
 STAY_COLUMNS = {
@@ -227,6 +228,21 @@ def run_migrations() -> None:
 
         for column, col_type in TAKEAWAY_COLUMNS.items():
             _add_column_if_missing(conn, "takeaway_orders", column, col_type)
+
+        # Existing rows: treat missing status as waiting.
+        inspector = inspect(engine)
+        if "takeaway_orders" in inspector.get_table_names():
+            takeaway_cols = {
+                col["name"] for col in inspector.get_columns("takeaway_orders")
+            }
+            if "fulfillment_status" in takeaway_cols:
+                conn.execute(
+                    text(
+                        "UPDATE takeaway_orders "
+                        "SET fulfillment_status = 'waiting' "
+                        "WHERE fulfillment_status IS NULL OR fulfillment_status = ''"
+                    )
+                )
 
         conn.commit()
 

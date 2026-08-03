@@ -123,11 +123,11 @@ export default function App() {
       <Toaster
         position="top-right"
         richColors
-        duration={Infinity}
+        duration={2000}
         closeButton
         offset={56}
         toastOptions={{
-          duration: Infinity,
+          duration: 2000,
           closeButton: true,
           classNames: {
             toast: "crm-toast",

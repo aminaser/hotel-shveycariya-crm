@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
+TakeawayFulfillmentStatus = Literal["waiting", "picked_up"]
 
 
 class TakeawayOrderBase(BaseModel):
@@ -15,6 +17,7 @@ class TakeawayOrderBase(BaseModel):
     prepayment: Decimal = Decimal("0")
     payment_method: Optional[str] = None
     payment_date: Optional[date] = None
+    fulfillment_status: TakeawayFulfillmentStatus = "waiting"
     dishes: Optional[str] = None
     notes: Optional[str] = None
 
@@ -31,6 +34,7 @@ class TakeawayOrderUpdate(BaseModel):
     prepayment: Optional[Decimal] = None
     payment_method: Optional[str] = None
     payment_date: Optional[date] = None
+    fulfillment_status: Optional[TakeawayFulfillmentStatus] = None
     dishes: Optional[str] = None
     notes: Optional[str] = None
 

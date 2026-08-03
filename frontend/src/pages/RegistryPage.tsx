@@ -8,6 +8,10 @@ import type { Client, RegistrySummary, Room, Stay, StayType, PaymentStatus } fro
 import { AuthorFilter } from "@/components/AuthorFilter";
 import { AuthorshipMeta } from "@/components/AuthorshipMeta";
 import { ClientProfileSheet } from "@/components/ClientProfileSheet";
+import {
+  PartialPaymentRemainder,
+  paymentDateForEvent,
+} from "@/components/PartialPaymentRemainder";
 import { PaymentMethodSelect } from "@/components/PaymentMethodSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -131,7 +135,10 @@ const emptyPayForm = (
     payment_status: allPaid ? "paid" : anyPartial || displayPrepay > 0 ? "partial" : "paid",
     payment_method_preset: preset || "cash",
     payment_method_custom: customText,
-    payment_date: payPrimary?.payment_date || primary?.payment_date || todayLocal(),
+    payment_date:
+      payPrimary?.payment_date ||
+      primary?.payment_date ||
+      paymentDateForEvent(primary?.check_in || primary?.record_date, todayLocal()),
   };
 };
 
@@ -1655,13 +1662,19 @@ export function RegistryPage() {
                   value={form.payment_status}
                   onValueChange={(v) => {
                     const payment_status = v as PaymentStatus;
+                    const eventDate = paymentDateForEvent(
+                      form.check_in || form.record_date,
+                      todayLocal(),
+                    );
                     setForm({
                       ...form,
                       payment_status,
                       payment_date:
                         payment_status === "unpaid"
                           ? ""
-                          : form.payment_date || todayLocal(),
+                          : payment_status === "partial"
+                            ? eventDate
+                            : form.payment_date || eventDate,
                       prepayment:
                         payment_status === "partial" ? form.prepayment : "",
                     });
@@ -1685,34 +1698,43 @@ export function RegistryPage() {
                   type="number"
                   min="0"
                   value={form.prepayment}
-                  onChange={(e) => setForm({ ...form, prepayment: e.target.value })}
+                  onChange={(e) => {
+                    const prepayment = e.target.value;
+                    const eventDate = paymentDateForEvent(
+                      form.check_in || form.record_date,
+                      todayLocal(),
+                    );
+                    setForm({
+                      ...form,
+                      prepayment,
+                      payment_date:
+                        parseFloat(prepayment || "0") > 0
+                          ? eventDate
+                          : form.payment_date,
+                    });
+                  }}
                   placeholder="Сумма предоплаты"
                 />
-                {form.payment_amount &&
-                  parseFloat(form.prepayment || "0") > 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      Остаток:{" "}
-                      {formatMoney(
-                        Math.max(
-                          0,
-                          (parseFloat(form.payment_amount) || 0) -
-                            (parseFloat(form.prepayment) || 0),
-                        ),
-                      )}
-                    </p>
-                  )}
+                <PartialPaymentRemainder
+                  totalAmount={parseFloat(form.payment_amount) || 0}
+                  prepayment={form.prepayment}
+                />
               </div>
             )}
             {form.payment_status !== "unpaid" && (
               <div className="space-y-2">
-                <Label>Дата оплаты</Label>
+                <Label>
+                  {form.payment_status === "partial" ? "Дата доплаты" : "Дата оплаты"}
+                </Label>
                 <Input
                   type="date"
                   value={form.payment_date}
                   onChange={(e) => setForm({ ...form, payment_date: e.target.value })}
                 />
                 <p className="text-xs text-muted-foreground">
-                  В аналитике выручка считается по дате оплаты
+                  {form.payment_status === "partial"
+                    ? "По умолчанию — дата заезда / проведения"
+                    : "В аналитике выручка считается по дате оплаты"}
                 </p>
               </div>
             )}
@@ -1795,7 +1817,9 @@ export function RegistryPage() {
                 </div>
               </div>
               <div className="space-y-2">
-                <Label>Дата оплаты</Label>
+                <Label>
+                  {payForm.payment_status === "partial" ? "Дата доплаты" : "Дата оплаты"}
+                </Label>
                 <Input
                   type="date"
                   value={payForm.payment_date}
@@ -1820,9 +1844,17 @@ export function RegistryPage() {
                     value={payForm.payment_status}
                     onValueChange={(v) => {
                       const payment_status = v as PaymentStatus;
+                      const eventDate = paymentDateForEvent(
+                        payStay.check_in || payStay.record_date,
+                        todayLocal(),
+                      );
                       setPayForm({
                         ...payForm,
                         payment_status,
+                        payment_date:
+                          payment_status === "partial"
+                            ? eventDate
+                            : payForm.payment_date || eventDate,
                         prepayment:
                           payment_status === "partial" ? payForm.prepayment : "",
                       });
@@ -1845,25 +1877,31 @@ export function RegistryPage() {
                     type="number"
                     min="0"
                     value={payForm.prepayment}
-                    onChange={(e) =>
-                      setPayForm({ ...payForm, prepayment: e.target.value })
-                    }
+                    onChange={(e) => {
+                      const prepayment = e.target.value;
+                      const eventDate = paymentDateForEvent(
+                        payStay.check_in || payStay.record_date,
+                        todayLocal(),
+                      );
+                      setPayForm({
+                        ...payForm,
+                        prepayment,
+                        payment_date:
+                          parseFloat(prepayment || "0") > 0
+                            ? eventDate
+                            : payForm.payment_date,
+                      });
+                    }}
                     placeholder="Сумма предоплаты"
                   />
-                  {(payForm.payment_amount || payStay.payment_amount) &&
-                    parseFloat(payForm.prepayment || "0") > 0 && (
-                      <p className="text-xs text-muted-foreground">
-                        Остаток:{" "}
-                        {formatMoney(
-                          Math.max(
-                            0,
-                            (parseFloat(
-                              payForm.payment_amount || payStay.payment_amount,
-                            ) || 0) - (parseFloat(payForm.prepayment) || 0),
-                          ),
-                        )}
-                      </p>
-                    )}
+                  <PartialPaymentRemainder
+                    totalAmount={
+                      parseFloat(
+                        payForm.payment_amount || payStay.payment_amount || "0",
+                      ) || 0
+                    }
+                    prepayment={payForm.prepayment}
+                  />
                 </div>
               )}
               <PaymentMethodSelect

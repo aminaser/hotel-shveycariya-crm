@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { toast } from "@/lib/toast";
 
 import { apiFetch, ApiError } from "@/api/client";
@@ -26,7 +26,6 @@ import {
 
 export function ClientsPage() {
   const queryClient = useQueryClient();
-  const dedupedRef = useRef(false);
   const [search, setSearch] = useState("");
   const [authorId, setAuthorId] = useState<number | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -73,13 +72,8 @@ export function ClientsPage() {
     },
   });
 
-  useEffect(() => {
-    if (dedupedRef.current) return;
-    dedupedRef.current = true;
-    dedupeClients.mutate();
-    // Run once on open to clean existing duplicates (Ольга×2, Евгения×3, …).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Auto-dedupe on open removed: name-based merge previously wiped unique guests.
+  // Phone/IIN/BIN merge remains available via backend /clients/dedupe if needed.
 
   const createClient = useMutation({
     mutationFn: () =>

@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator
 
-WORKPLACES = ("letnik", "bar", "banquet")
+WORKPLACES = ("letnik", "bar", "banquet", "none")
 
 
 class EmployeeBase(BaseModel):
@@ -37,7 +37,7 @@ class ShiftBase(BaseModel):
     work_date: date
     start_time: str = Field(pattern=r"^\d{2}:\d{2}$")
     end_time: str = Field(pattern=r"^\d{2}:\d{2}$")
-    workplace: str = Field(pattern=r"^(letnik|bar|banquet)$")
+    workplace: str = Field(pattern=r"^(letnik|bar|banquet|none)$")
     hourly_rate: Decimal | None = Field(default=None, ge=0)
 
     @field_validator("start_time", "end_time")
@@ -58,7 +58,7 @@ class ShiftUpdate(BaseModel):
     work_date: date | None = None
     start_time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
     end_time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
-    workplace: str | None = Field(default=None, pattern=r"^(letnik|bar|banquet)$")
+    workplace: str | None = Field(default=None, pattern=r"^(letnik|bar|banquet|none)$")
     hourly_rate: Decimal | None = Field(default=None, ge=0)
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Optional
 
@@ -201,6 +201,7 @@ def get_analytics(
         spa_revenue += amount
         daily[payment.payment_date]["revenue"] += amount
 
+    # Unpaid guest services in the period (by service day).
     guest_services = (
         db.query(GuestService)
         .filter(
@@ -210,11 +211,19 @@ def get_analytics(
         )
         .all()
     )
-    paid_guest_services = [
-        row
-        for row in guest_services
-        if row.payment_status == "paid" and row.payment_date is not None
-    ]
+    # Revenue attributed by payment_date (same rule as stays / banquets).
+    paid_guest_services = (
+        db.query(GuestService)
+        .filter(
+            GuestService.deleted_at.is_(None),
+            GuestService.payment_status == "paid",
+            GuestService.payment_date.isnot(None),
+            GuestService.payment_date >= date_from,
+            GuestService.payment_date <= today,
+            GuestService.amount > 0,
+        )
+        .all()
+    )
     guest_service_revenue = Decimal("0")
     for row in paid_guest_services:
         amount = row.amount or Decimal("0")
@@ -244,6 +253,7 @@ def get_analytics(
         .filter(
             TimesheetShift.work_date >= date_from,
             TimesheetShift.work_date <= today,
+            TimesheetShift.deleted_at.is_(None),
             Employee.deleted_at.is_(None),
         )
         .all()
@@ -340,6 +350,9 @@ def get_analytics(
             SpaBookingPayment.deleted_at.is_(None),
             SpaBookingPayment.amount > 0,
             SpaBookingPayment.payment_date.is_(None),
+            SpaBookingPayment.created_at >= datetime.combine(date_from, datetime.min.time()),
+            SpaBookingPayment.created_at
+            < datetime.combine(today + timedelta(days=1), datetime.min.time()),
         )
         .count()
     )

@@ -47,6 +47,7 @@ create table if not exists public.crm_takeaway_orders (
   prepayment numeric(12,2) not null default 0,
   payment_method text,
   payment_date date,
+  fulfillment_status text not null default 'waiting',
   dishes text,
   notes text,
   deleted_at timestamptz,
@@ -60,6 +61,9 @@ create index if not exists crm_takeaway_orders_order_date_idx on public.crm_take
 create index if not exists crm_takeaway_orders_crm_id_idx on public.crm_takeaway_orders (crm_id);
 create index if not exists crm_takeaway_orders_deleted_at_idx on public.crm_takeaway_orders (deleted_at);
 create index if not exists crm_takeaway_orders_updated_at_idx on public.crm_takeaway_orders (updated_at desc);
+
+alter table public.crm_takeaway_orders
+  add column if not exists fulfillment_status text not null default 'waiting';
 
 -- ─── Clients ────────────────────────────────────────────────────────────────
 create table if not exists public.crm_clients (

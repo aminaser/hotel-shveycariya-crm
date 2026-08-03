@@ -268,6 +268,9 @@ def _banquet_payload(banquet: Banquet) -> dict[str, Any]:
 
 
 def _takeaway_payload(order: TakeawayOrder) -> dict[str, Any]:
+    status = getattr(order, "fulfillment_status", None)
+    if hasattr(status, "value"):
+        status = status.value
     return {
         "id": ensure_cloud_id(order),
         "crm_id": order.id,
@@ -278,6 +281,7 @@ def _takeaway_payload(order: TakeawayOrder) -> dict[str, Any]:
         "prepayment": order.prepayment or Decimal("0"),
         "payment_method": order.payment_method,
         "payment_date": order.payment_date,
+        "fulfillment_status": status or "waiting",
         "dishes": order.dishes,
         "notes": order.notes,
         "deleted_at": order.deleted_at,
@@ -712,6 +716,15 @@ def _pull_takeaways(db: Session) -> int:
         local.prepayment = Decimal(str(row.get("prepayment") or "0"))
         local.payment_method = row.get("payment_method")
         local.payment_date = _parse_date(row.get("payment_date"))
+        raw_status = (row.get("fulfillment_status") or "waiting")
+        if hasattr(raw_status, "value"):
+            raw_status = raw_status.value
+        status_text = str(raw_status).strip().lower()
+        local.fulfillment_status = (
+            "picked_up"
+            if status_text in ("picked_up", "picked-up", "done")
+            else "waiting"
+        )
         local.dishes = row.get("dishes")
         local.notes = row.get("notes")
         local.deleted_at = _parse_datetime(row.get("deleted_at"))
@@ -745,7 +758,23 @@ def _pull_clients(db: Session) -> int:
                 _adopt_cloud_id(local, cloud_id)
         if local is None and row.get("deleted_at"):
             continue
-        if local and not _remote_is_newer(local.updated_at, row.get("updated_at")):
+        remote_deleted = bool(row.get("deleted_at"))
+        # Revive locally soft-deleted guests only when cloud is alive AND we do not
+        # already have another active twin (same phone / same ФИО).
+        revive_from_cloud = False
+        if local and local.deleted_at and not remote_deleted:
+            phone = (row.get("phone") or "").strip() or None
+            twin_q = db.query(Client).filter(
+                Client.deleted_at.is_(None),
+                Client.id != local.id,
+            )
+            twin = None
+            if phone:
+                twin = twin_q.filter(Client.phone == phone).first()
+            if twin is None:
+                twin = twin_q.filter(Client.full_name == full_name).first()
+            revive_from_cloud = twin is None
+        if local and not revive_from_cloud and not _remote_is_newer(local.updated_at, row.get("updated_at")):
             continue
         if local is None:
             local = Client(cloud_id=cloud_id, full_name=full_name)
@@ -759,7 +788,10 @@ def _pull_clients(db: Session) -> int:
         local.date_of_birth = _parse_date(row.get("date_of_birth"))
         local.document_number = row.get("document_number")
         local.notes = row.get("notes")
-        local.deleted_at = _parse_datetime(row.get("deleted_at"))
+        if revive_from_cloud:
+            local.deleted_at = None
+        else:
+            local.deleted_at = _parse_datetime(row.get("deleted_at"))
         local.created_by_name = row.get("created_by_name")
         local.updated_by_name = row.get("updated_by_name")
         touched += 1

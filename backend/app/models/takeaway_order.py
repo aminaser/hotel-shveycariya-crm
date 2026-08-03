@@ -1,11 +1,17 @@
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
+import enum
 
 from sqlalchemy import Date, DateTime, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+
+
+class TakeawayFulfillmentStatus(str, enum.Enum):
+    waiting = "waiting"
+    picked_up = "picked_up"
 
 
 class TakeawayOrder(Base):
@@ -22,6 +28,12 @@ class TakeawayOrder(Base):
     )
     payment_method: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     payment_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    # waiting | picked_up — stored as plain string for SQLite-friendly migrations.
+    fulfillment_status: Mapped[str] = mapped_column(
+        String(32),
+        default=TakeawayFulfillmentStatus.waiting.value,
+        nullable=False,
+    )
     dishes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(

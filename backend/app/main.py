@@ -17,6 +17,7 @@ from app.routers import (
     acts,
     alumni_prices,
     analytics,
+    as_prices,
     auth,
     banquets,
     clients,
@@ -122,6 +123,7 @@ app.include_router(spa_bookings.router, prefix=API_PREFIX)
 app.include_router(guest_requests.router, prefix=API_PREFIX)
 app.include_router(sync_router.router, prefix=API_PREFIX)
 app.include_router(alumni_prices.router, prefix=API_PREFIX)
+app.include_router(as_prices.router, prefix=API_PREFIX)
 app.include_router(takeaway_orders.router, prefix=API_PREFIX)
 app.include_router(guest_services.router, prefix=API_PREFIX)
 app.include_router(timesheet.router, prefix=API_PREFIX)

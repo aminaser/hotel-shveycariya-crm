@@ -7,6 +7,10 @@ import { apiFetch, ApiError } from "@/api/client";
 import type { Stay } from "@/api/types";
 import { AuthorFilter } from "@/components/AuthorFilter";
 import { AuthorshipMeta } from "@/components/AuthorshipMeta";
+import {
+  PartialPaymentRemainder,
+  paymentDateForEvent,
+} from "@/components/PartialPaymentRemainder";
 import { PaymentMethodSelect } from "@/components/PaymentMethodSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,6 +49,7 @@ import {
   type SpaService,
   supabase,
 } from "@/lib/supabase";
+import type { PaymentStatus } from "@/api/types";
 
 interface SpaPrices {
   sauna: number;
@@ -96,6 +101,8 @@ interface SpaForm {
   source: string;
   notes: string;
   amount: string;
+  prepayment: string;
+  payment_status: PaymentStatus;
   payment_method_preset: PaymentMethodPreset | string;
   payment_method_custom: string;
   payment_date: string;
@@ -140,9 +147,11 @@ function emptyForm(prices: SpaPrices = DEFAULT_SPA_PRICES): SpaForm {
     source: "walk_in",
     notes: "",
     amount: String(prices.sauna),
+    prepayment: "",
+    payment_status: "unpaid",
     payment_method_preset: "cash",
     payment_method_custom: "",
-    payment_date: todayLocalShared(),
+    payment_date: "",
   };
 }
 
@@ -158,11 +167,20 @@ async function fetchBookings(dateFrom: string, dateTo: string): Promise<SpaBooki
     return bookings.map((booking) => {
       const payment = byId.get(booking.id);
       if (!payment) {
-        return { ...booking, payment_method: null, payment_date: null };
+        return {
+          ...booking,
+          paid_amount: null,
+          payment_method: null,
+          payment_date: null,
+        };
       }
+      const paid = Number(payment.amount) || 0;
+      const total = Number(booking.price) || 0;
       return {
         ...booking,
-        price: Number(payment.amount) || booking.price,
+        // Prefer stored booking price as total; if missing, fall back to paid.
+        price: total > 0 ? total : paid || null,
+        paid_amount: paid,
         payment_method: payment.payment_method,
         payment_date: payment.payment_date,
       };
@@ -170,6 +188,7 @@ async function fetchBookings(dateFrom: string, dateTo: string): Promise<SpaBooki
   } catch {
     return bookings.map((booking) => ({
       ...booking,
+      paid_amount: null,
       payment_method: null,
       payment_date: null,
     }));
@@ -211,7 +230,7 @@ async function createBooking(
       notes: payload.notes || null,
       payment_method: payment.payment_method,
       payment_date: payment.payment_date,
-      price: payment.amount,
+      price: payload.price ?? payment.amount,
     }),
   });
   void authorName;
@@ -243,7 +262,7 @@ async function updateBooking(
       notes: payload.notes || null,
       payment_method: payment.payment_method,
       payment_date: payment.payment_date,
-      price: payment.amount,
+      price: payload.price ?? payment.amount,
     }),
   });
   await upsertSpaPayment({
@@ -508,8 +527,25 @@ export function SpaJournalPage() {
       toast.error("Укажите имя гостя");
       return;
     }
-    const amount = Math.max(0, Number(form.amount) || 0);
-    if (amount > 0) {
+    const total = Math.max(0, Number(form.amount) || 0);
+    const prepaid = Math.max(0, Number(form.prepayment) || 0);
+    if (form.payment_status === "partial") {
+      if (!(prepaid > 0)) {
+        toast.error("Укажите сумму предоплаты");
+        return;
+      }
+      if (total > 0 && prepaid >= total) {
+        toast.error("Предоплата должна быть меньше общей суммы");
+        return;
+      }
+    }
+    const received =
+      form.payment_status === "paid"
+        ? total
+        : form.payment_status === "partial"
+          ? prepaid
+          : 0;
+    if (received > 0) {
       if (!form.payment_date) {
         toast.error("Укажите дату оплаты");
         return;
@@ -520,10 +556,14 @@ export function SpaJournalPage() {
       }
     }
     const paymentMethod =
-      amount > 0
+      received > 0
         ? resolvePaymentMethod(form.payment_method_preset, form.payment_method_custom)
         : null;
-    const paymentDate = amount > 0 ? form.payment_date || todayLocalShared() : null;
+    const paymentDate =
+      received > 0
+        ? form.payment_date ||
+          paymentDateForEvent(form.booking_date, todayLocalShared())
+        : null;
 
     saveMutation.mutate({
       payload: {
@@ -538,10 +578,11 @@ export function SpaJournalPage() {
         status: form.status ?? "confirmed",
         source: form.is_hotel_guest ? "crm" : "walk_in",
         notes: form.notes.trim() || null,
-        price: amount,
+        // Keep full booking price; payment row stores amount received.
+        price: total,
       },
       payment: {
-        amount,
+        amount: received,
         payment_method: paymentMethod,
         payment_date: paymentDate,
       },
@@ -552,10 +593,19 @@ export function SpaJournalPage() {
     setEditingId(booking.id);
     setSelectedStayId("");
     const { preset, customText } = splitPaymentMethod(booking.payment_method);
-    const amount =
+    const total =
       booking.price != null && booking.price > 0
-        ? String(booking.price)
-        : String(spaPrices[booking.service] ?? 0);
+        ? booking.price
+        : spaPrices[booking.service] ?? 0;
+    const paid = Number(booking.paid_amount) || 0;
+    let payment_status: PaymentStatus = "unpaid";
+    let prepayment = "";
+    if (paid > 0 && total > 0 && paid < total) {
+      payment_status = "partial";
+      prepayment = String(Math.round(paid));
+    } else if (paid > 0 || booking.payment_date) {
+      payment_status = "paid";
+    }
     setForm({
       booking_date: booking.booking_date,
       slot_time: booking.slot_time,
@@ -568,10 +618,14 @@ export function SpaJournalPage() {
       status: booking.status,
       source: booking.source,
       notes: booking.notes ?? "",
-      amount,
+      amount: String(total || spaPrices[booking.service] || 0),
+      prepayment,
+      payment_status,
       payment_method_preset: preset,
       payment_method_custom: customText,
-      payment_date: booking.payment_date ?? todayLocalShared(),
+      payment_date:
+        booking.payment_date ??
+        paymentDateForEvent(booking.booking_date, todayLocalShared()),
     });
     setDialogOpen(true);
   };
@@ -729,17 +783,26 @@ export function SpaJournalPage() {
                   <div className="text-sm text-muted-foreground">{booking.notes}</div>
                 )}
                 <div className="text-xs text-muted-foreground">
-                  {booking.payment_date && booking.price != null && booking.price > 0 ? (
-                    <>
-                      Сумма: {formatMoney(booking.price)}
-                      {booking.payment_method
-                        ? ` · ${formatPaymentMethod(booking.payment_method)}`
-                        : ""}
-                      {` · оплата ${formatDate(booking.payment_date)}`}
-                    </>
-                  ) : (
-                    "Оплата не указана"
-                  )}
+                  {(() => {
+                    const total = Number(booking.price) || 0;
+                    const paid = Number(booking.paid_amount) || 0;
+                    if (!(booking.payment_date && (total > 0 || paid > 0))) {
+                      return "Оплата не указана";
+                    }
+                    const isPartial = total > 0 && paid > 0 && paid < total;
+                    return (
+                      <>
+                        Сумма: {formatMoney(total || paid)}
+                        {isPartial
+                          ? ` · предоплата ${formatMoney(paid)} · доплата ${formatMoney(total - paid)}`
+                          : ""}
+                        {booking.payment_method
+                          ? ` · ${formatPaymentMethod(booking.payment_method)}`
+                          : ""}
+                        {` · оплата ${formatDate(booking.payment_date)}`}
+                      </>
+                    );
+                  })()}
                 </div>
                 <AuthorshipMeta
                   createdByName={booking.created_by_name}
@@ -964,36 +1027,108 @@ export function SpaJournalPage() {
                 <div />
               )}
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label>Сумма, ₸</Label>
+            <div className="space-y-2">
+              <Label>Общая сумма, ₸</Label>
+              <Input
+                type="number"
+                min={0}
+                value={form.amount}
+                onChange={(e) => setForm((prev) => ({ ...prev, amount: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Статус оплаты</Label>
+              <Select
+                value={form.payment_status}
+                onValueChange={(v) => {
+                  const payment_status = v as PaymentStatus;
+                  setForm((prev) => {
+                    const eventDate = paymentDateForEvent(
+                      prev.booking_date,
+                      todayLocalShared(),
+                    );
+                    return {
+                      ...prev,
+                      payment_status,
+                      payment_date:
+                        payment_status === "unpaid"
+                          ? ""
+                          : payment_status === "partial"
+                            ? eventDate
+                            : prev.payment_date || eventDate,
+                      prepayment:
+                        payment_status === "partial" ? prev.prepayment : "",
+                    };
+                  });
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="paid">Оплачено</SelectItem>
+                  <SelectItem value="partial">Частично</SelectItem>
+                  <SelectItem value="unpaid">Не оплачено</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {form.payment_status === "partial" && (
+              <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
+                <Label>Предоплата, ₸</Label>
                 <Input
                   type="number"
                   min={0}
-                  value={form.amount}
-                  onChange={(e) => setForm((prev) => ({ ...prev, amount: e.target.value }))}
+                  value={form.prepayment}
+                  onChange={(e) => {
+                    const prepayment = e.target.value;
+                    setForm((prev) => ({
+                      ...prev,
+                      prepayment,
+                      payment_date:
+                        parseFloat(prepayment || "0") > 0
+                          ? paymentDateForEvent(prev.booking_date, todayLocalShared())
+                          : prev.payment_date,
+                    }));
+                  }}
+                  placeholder="Сумма предоплаты"
+                />
+                <PartialPaymentRemainder
+                  totalAmount={Number(form.amount) || 0}
+                  prepayment={form.prepayment}
                 />
               </div>
-              <div className="space-y-2">
-                <Label>Дата оплаты</Label>
-                <Input
-                  type="date"
-                  value={form.payment_date}
-                  onChange={(e) => setForm((prev) => ({ ...prev, payment_date: e.target.value }))}
-                  disabled={!form.amount || Number(form.amount) <= 0}
+            )}
+            {form.payment_status !== "unpaid" && (
+              <>
+                <div className="space-y-2">
+                  <Label>
+                    {form.payment_status === "partial" ? "Дата доплаты" : "Дата оплаты"}
+                  </Label>
+                  <Input
+                    type="date"
+                    value={form.payment_date}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, payment_date: e.target.value }))
+                    }
+                  />
+                  {form.payment_status === "partial" && (
+                    <p className="text-xs text-muted-foreground">
+                      По умолчанию — дата бронирования
+                    </p>
+                  )}
+                </div>
+                <PaymentMethodSelect
+                  preset={form.payment_method_preset}
+                  customText={form.payment_method_custom}
+                  onPresetChange={(value) =>
+                    setForm((prev) => ({ ...prev, payment_method_preset: value }))
+                  }
+                  onCustomTextChange={(value) =>
+                    setForm((prev) => ({ ...prev, payment_method_custom: value }))
+                  }
                 />
-              </div>
-            </div>
-            <PaymentMethodSelect
-              preset={form.payment_method_preset}
-              customText={form.payment_method_custom}
-              onPresetChange={(value) =>
-                setForm((prev) => ({ ...prev, payment_method_preset: value }))
-              }
-              onCustomTextChange={(value) =>
-                setForm((prev) => ({ ...prev, payment_method_custom: value }))
-              }
-            />
+              </>
+            )}
 
             <div className="space-y-2">
               <Label>Заметки</Label>

@@ -121,6 +121,8 @@ export interface Banquet {
   updated_by_name: string | null;
 }
 
+export type TakeawayFulfillmentStatus = "waiting" | "picked_up";
+
 export interface TakeawayOrder {
   id: number;
   cloud_id?: string | null;
@@ -131,6 +133,7 @@ export interface TakeawayOrder {
   prepayment: string;
   payment_method: string | null;
   payment_date: string | null;
+  fulfillment_status?: TakeawayFulfillmentStatus | null;
   dishes: string | null;
   notes: string | null;
   created_at: string;
@@ -322,7 +325,7 @@ export interface SetupInitPayload {
   room_numbers: string[];
 }
 
-export type Workplace = "letnik" | "bar" | "banquet";
+export type Workplace = "letnik" | "bar" | "banquet" | "none";
 
 export interface Employee {
   id: number;
